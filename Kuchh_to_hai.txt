@@ -1,0 +1,20 @@
+2 interface - Rider and Consumer
+Rider Interface:
+-> Select number of seats-> Sets route -> Final Route 
+-> Pings the rider that a customer is on their route
+-> Accepts Customer request 
+
+Consumer Interface: 
+-> Drop Location
+-> Shows the rider route along with number of empty seats
+-> Shows live location of the rider 
+-> Normal wait time
+-> Sends request to Rider 
+
+## Fare Calculator 
+
+(Rider)Posts the route along with no. of seats -> (Customer) Sets the drop location ((if the drop and pickup matches with rider's route)):
+
+Customer sends request to rider-> Rider accept the Req -> Map shows the pickup location closest to the route and customer-> (add a chat for instructions) ->  
+
+PROBLEM: What if a friend arrives along with the Rider and is not verified and puts a gun to your tip?
