@@ -44,7 +44,7 @@ class _PromoCarouselState extends State<PromoCarousel> {
   @override
   void initState() {
     super.initState();
-    _pageController = PageController(viewportFraction: 0.94);
+    _pageController = PageController(viewportFraction: 1.0);
     _autoScrollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (!mounted) return;
       _currentPage = (_currentPage + 1) % _banners.length;
@@ -76,10 +76,8 @@ class _PromoCarouselState extends State<PromoCarousel> {
             itemCount: _banners.length,
             itemBuilder: (context, index) {
               final b = _banners[index];
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Container(
-                  padding: const EdgeInsets.all(14),
+              return Container(
+                padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
                     gradient: b['gradient'] as LinearGradient,
                     borderRadius: BorderRadius.circular(16),
@@ -156,9 +154,8 @@ class _PromoCarouselState extends State<PromoCarousel> {
                       ),
                     ],
                   ),
-                ),
-              );
-            },
+                );
+              },
           ),
         ),
         const SizedBox(height: 10),

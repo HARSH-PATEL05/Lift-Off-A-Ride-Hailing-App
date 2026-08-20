@@ -80,13 +80,14 @@ class BookingBottomSheet extends StatelessWidget {
               // Spacing
               const SliverToBoxAdapter(child: SizedBox(height: 24)),
 
-              // Service selector
+              // Service selector (Centred with symmetric 20px padding)
               SliverPadding(
-                padding: const EdgeInsets.only(left: 20),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
                 sliver: SliverToBoxAdapter(
                   child: ServiceSelector(
                     selectedServiceId: selectedServiceId,
                     onServiceSelected: onServiceSelected,
+                    onBook: onBook,
                   ),
                 ),
               ),
@@ -94,9 +95,9 @@ class BookingBottomSheet extends StatelessWidget {
               // Spacing
               const SliverToBoxAdapter(child: SizedBox(height: 24)),
 
-              // Promo carousel
+              // Promo carousel (Centred with symmetric 20px padding)
               SliverPadding(
-                padding: const EdgeInsets.only(left: 20),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
                 sliver: const SliverToBoxAdapter(
                   child: PromoCarousel(),
                 ),

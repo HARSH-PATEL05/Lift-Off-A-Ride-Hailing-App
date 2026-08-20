@@ -8,11 +8,13 @@ import '../../../core/data/mock_data.dart';
 class ServiceSelector extends StatelessWidget {
   final String selectedServiceId;
   final ValueChanged<String> onServiceSelected;
+  final VoidCallback onBook;
 
   const ServiceSelector({
     super.key,
     required this.selectedServiceId,
     required this.onServiceSelected,
+    required this.onBook,
   });
 
   @override
@@ -70,6 +72,7 @@ class ServiceSelector extends StatelessWidget {
               onTap: () {
                 HapticFeedback.selectionClick();
                 onServiceSelected(ride.id);
+                onBook();
               },
             );
           },

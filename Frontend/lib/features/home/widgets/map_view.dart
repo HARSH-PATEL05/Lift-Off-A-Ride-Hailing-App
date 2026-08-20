@@ -38,33 +38,75 @@ class _MapViewState extends State<MapView> with SingleTickerProviderStateMixin {
 
   /// Request permissions and start live GPS tracking
   Future<void> _initLiveLocation() async {
+    if (!mounted) return;
     setState(() => _isLocating = true);
 
     try {
+      // 1. Check if GPS / Location services are enabled
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        setState(() => _isLocating = false);
+        debugPrint('Location services are disabled.');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Please enable GPS / Location Services on your device.'),
+              action: SnackBarAction(
+                label: 'Settings',
+                onPressed: () => Geolocator.openLocationSettings(),
+              ),
+              duration: const Duration(seconds: 4),
+            ),
+          );
+          setState(() => _isLocating = false);
+        }
         return;
       }
 
+      // 2. Check and request location permissions
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
-          setState(() => _isLocating = false);
+          debugPrint('Location permissions denied by user.');
+          if (mounted) {
+            setState(() => _isLocating = false);
+          }
           return;
         }
       }
 
       if (permission == LocationPermission.deniedForever) {
-        setState(() => _isLocating = false);
+        debugPrint('Location permissions permanently denied.');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Location permission is permanently denied. Please enable in App Settings.'),
+              action: SnackBarAction(
+                label: 'Settings',
+                onPressed: () => Geolocator.openAppSettings(),
+              ),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+          setState(() => _isLocating = false);
+        }
         return;
       }
 
-      // Fetch initial position
+      // 3. Fast initial fix using last known position
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown != null && mounted) {
+        setState(() {
+          _currentPosition = LatLng(lastKnown.latitude, lastKnown.longitude);
+        });
+        _mapController.move(_currentPosition, 15.0);
+      }
+
+      // 4. Fetch fresh current GPS fix with timeout
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
         ),
       );
 
@@ -73,26 +115,33 @@ class _MapViewState extends State<MapView> with SingleTickerProviderStateMixin {
           _currentPosition = LatLng(position.latitude, position.longitude);
           _isLocating = false;
         });
-        _mapController.move(_currentPosition, 14.5);
+        _mapController.move(_currentPosition, 15.0);
       }
 
-      // Listen to continuous live location stream
-      const locationSettings = LocationSettings(
+      // 5. Start continuous live GPS stream
+      _positionStreamSubscription?.cancel();
+      const streamSettings = LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
+        distanceFilter: 5,
       );
 
       _positionStreamSubscription = Geolocator.getPositionStream(
-        locationSettings: locationSettings,
-      ).listen((Position position) {
-        if (mounted) {
-          setState(() {
-            _currentPosition = LatLng(position.latitude, position.longitude);
-          });
-        }
-      });
+        locationSettings: streamSettings,
+      ).listen(
+        (Position pos) {
+          if (mounted) {
+            setState(() {
+              _currentPosition = LatLng(pos.latitude, pos.longitude);
+            });
+          }
+        },
+        onError: (err) {
+          debugPrint('Location stream error: $err');
+        },
+      );
     } catch (e) {
       debugPrint('Live location error: $e');
+    } finally {
       if (mounted) {
         setState(() => _isLocating = false);
       }
@@ -100,7 +149,7 @@ class _MapViewState extends State<MapView> with SingleTickerProviderStateMixin {
   }
 
   void _recenter() {
-    _mapController.move(_currentPosition, 14.5);
+    _mapController.move(_currentPosition, 15.0);
   }
 
   @override
@@ -119,13 +168,11 @@ class _MapViewState extends State<MapView> with SingleTickerProviderStateMixin {
             ),
           ),
           children: [
-            // Detailed Google Maps Tiles (Full POIs, building footprints, road names)
+            // High-resolution OpenStreetMap Tiles
             TileLayer(
-              urlTemplate:
-                  'https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
-              subdomains: const ['mt0', 'mt1', 'mt2', 'mt3'],
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.example.liftoff_auth_test',
-              maxZoom: 20,
+              maxZoom: 19,
             ),
 
             // Shared Commute Corridor Polylines
