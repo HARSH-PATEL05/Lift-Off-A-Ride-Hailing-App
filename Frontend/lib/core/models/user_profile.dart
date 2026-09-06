@@ -51,11 +51,13 @@ class UserProfile {
       aadhaarVerified:
           json['aadhaar_verified'] as bool? ?? false,
 
-      dlVerified:
-          json['driving_licence_verified'] as bool? ?? false,
+      dlVerified: (json['driving_licence_verified'] as bool?) ??
+          (json['dl_verified'] as bool?) ??
+          false,
 
-      vehicleRcVerified:
-          json['rc_verified'] as bool? ?? false,
+      vehicleRcVerified: (json['rc_verified'] as bool?) ??
+          (json['vehicle_rc_verified'] as bool?) ??
+          false,
 
       // Aadhaar masked value
       maskedAadhaar:

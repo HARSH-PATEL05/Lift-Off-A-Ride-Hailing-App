@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/data/mock_data.dart';
+import '../../../core/services/auth_service.dart';
 
 /// Rider / Host Dashboard Surface (Offered Trips, Verification Vault, Fuel Stats)
 class RiderHostDashboard extends StatefulWidget {
@@ -23,7 +25,14 @@ class _RiderHostDashboardState extends State<RiderHostDashboard> {
 
   @override
   Widget build(BuildContext context) {
-    final user = MockData.currentUser;
+    final profile = AuthService.instance.currentProfile;
+    final mockUser = MockData.currentUser;
+    final displayName = profile?.fullName ?? mockUser.name;
+    final avatarUrl = profile?.avatarUrl;
+    final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U';
+    final aadhaarVerified = profile?.aadhaarVerified ?? false;
+    final dlVerified = profile?.dlVerified ?? false;
+    final rcVerified = profile?.vehicleRcVerified ?? false;
 
     return Scaffold(
       backgroundColor: AppColors.softGray,
@@ -60,13 +69,28 @@ class _RiderHostDashboardState extends State<RiderHostDashboard> {
                             width: 2,
                           ),
                         ),
-                        child: Center(
-                          child: Text(
-                            user.name[0],
-                            style: AppTextStyles.h2.copyWith(
-                              color: AppColors.primaryTeal,
-                            ),
-                          ),
+                        child: ClipOval(
+                          child: avatarUrl != null && avatarUrl.isNotEmpty
+                              ? CachedNetworkImage(
+                                  imageUrl: avatarUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: (_, __, ___) => Center(
+                                    child: Text(
+                                      initial,
+                                      style: AppTextStyles.h2.copyWith(
+                                        color: AppColors.primaryTeal,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : Center(
+                                  child: Text(
+                                    initial,
+                                    style: AppTextStyles.h2.copyWith(
+                                      color: AppColors.primaryTeal,
+                                    ),
+                                  ),
+                                ),
                         ),
                       ),
                       const SizedBox(width: 14),
@@ -75,13 +99,13 @@ class _RiderHostDashboardState extends State<RiderHostDashboard> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              user.name,
+                              displayName,
                               style: AppTextStyles.h2.copyWith(
                                 color: AppColors.white,
                               ),
                             ),
                             Text(
-                              'Host Status • ${user.rating} ★ (All Documents Verified)',
+                              'Host Status • ${mockUser.rating} ★',
                               style: AppTextStyles.caption.copyWith(
                                 color: AppColors.primaryTeal,
                               ),
@@ -94,14 +118,22 @@ class _RiderHostDashboardState extends State<RiderHostDashboard> {
 
                   const SizedBox(height: 16),
 
-                  // Verification Vault Chips
-                  Row(
+                  // Verification Vault Chips (live from backend)
+                  Wrap(
+                    spacing: 6,
                     children: [
-                      _VerifyPill(label: 'Aadhaar ✅', isDone: true),
-                      const SizedBox(width: 6),
-                      _VerifyPill(label: 'DL Validated ✅', isDone: true),
-                      const SizedBox(width: 6),
-                      _VerifyPill(label: 'Vehicle RC ✅', isDone: true),
+                      _VerifyPill(
+                        label: aadhaarVerified ? 'Aadhaar ✅' : 'Aadhaar ⏳',
+                        isDone: aadhaarVerified,
+                      ),
+                      _VerifyPill(
+                        label: dlVerified ? 'DL Validated ✅' : 'DL ⏳',
+                        isDone: dlVerified,
+                      ),
+                      _VerifyPill(
+                        label: rcVerified ? 'Vehicle RC ✅' : 'RC ⏳',
+                        isDone: rcVerified,
+                      ),
                     ],
                   ),
                 ],
@@ -143,7 +175,7 @@ class _RiderHostDashboardState extends State<RiderHostDashboard> {
                     ),
                     _StatItem(
                       label: 'Shared Commutes',
-                      value: '${user.sharedTripsCount}',
+                      value: '${mockUser.sharedTripsCount}',
                       icon: Icons.group_rounded,
                       color: AppColors.primaryTealDark,
                     ),
@@ -154,7 +186,7 @@ class _RiderHostDashboardState extends State<RiderHostDashboard> {
                     ),
                     _StatItem(
                       label: 'CO₂ Saved',
-                      value: '${user.co2SavedKg} kg 🌿',
+                      value: '${mockUser.co2SavedKg} kg 🌿',
                       icon: Icons.eco_rounded,
                       color: AppColors.verifiedGreen,
                     ),

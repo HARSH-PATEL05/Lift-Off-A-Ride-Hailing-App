@@ -1,6 +1,8 @@
-fastpi
+fastapi
 uvicorn
 sqlalchemy 
 psycopg2-binary 
 psycopg
 python-dotenv
+supabase
+cryptography
