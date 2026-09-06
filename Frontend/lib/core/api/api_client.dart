@@ -172,4 +172,23 @@ class ApiClient {
       throw const NetworkException();
     }
   }
+
+  /// PATCH request to FastAPI backend.
+  Future<dynamic> patch(
+    String endpoint, {
+    Map<String, dynamic>? body,
+  }) async {
+    try {
+      final response = await _httpClient.patch(
+        _buildUri(endpoint),
+        headers: _buildHeaders(),
+        body: body != null ? jsonEncode(body) : null,
+      );
+      return _handleResponse(response);
+    } on SocketException {
+      throw const NetworkException();
+    } on http.ClientException {
+      throw const NetworkException();
+    }
+  }
 }

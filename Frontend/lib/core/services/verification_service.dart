@@ -3,6 +3,7 @@ import '../api/api_client.dart';
 import '../api/api_endpoints.dart';
 import '../api/api_exceptions.dart';
 import '../models/user_profile.dart';
+import 'auth_service.dart';
 
 /// LiftOff — Verification Service
 /// Handles Aadhaar (and future DL / Vehicle RC) verification
@@ -55,6 +56,54 @@ class VerificationService {
       }
     } on ApiException {
       rethrow;
+    }
+  }
+
+  // ─── Driving Licence Verification ───
+
+  Future<UserProfile> verifyDrivingLicence(String licenceNumber) async {
+    final clean = licenceNumber.trim();
+    if (clean.length < 5) {
+      throw const ValidationException(message: 'Please enter a valid Driving Licence number.');
+    }
+
+    final response = await _apiClient.post(
+      ApiEndpoints.verifyDL,
+      body: {'licence_number': clean},
+    );
+
+    final data = response as Map<String, dynamic>;
+    if (data['verified'] == true) {
+      return await AuthService.instance.syncWithBackend();
+    } else {
+      throw ApiException(
+        message: data['message']?.toString() ?? 'Driving Licence verification failed.',
+        statusCode: 200,
+      );
+    }
+  }
+
+  // ─── Vehicle RC Verification ───
+
+  Future<UserProfile> verifyVehicleRc(String rcNumber) async {
+    final clean = rcNumber.trim();
+    if (clean.length < 5) {
+      throw const ValidationException(message: 'Please enter a valid Vehicle RC number.');
+    }
+
+    final response = await _apiClient.post(
+      ApiEndpoints.verifyRC,
+      body: {'rc_number': clean},
+    );
+
+    final data = response as Map<String, dynamic>;
+    if (data['verified'] == true) {
+      return await AuthService.instance.syncWithBackend();
+    } else {
+      throw ApiException(
+        message: data['message']?.toString() ?? 'Vehicle RC verification failed.',
+        statusCode: 200,
+      );
     }
   }
 }

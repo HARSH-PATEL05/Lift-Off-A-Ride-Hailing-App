@@ -5,6 +5,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/models/user_profile.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/services/verification_service.dart';
 
 /// Trust Vault & Profile Screen
 /// Displays authenticated user profile, avatar, email, and DigiLocker/Government verification badges.
@@ -61,6 +62,128 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
     }
   }
 
+  void _openVerificationDialog(String docType) {
+    final controller = TextEditingController();
+    String hintText = '';
+    String title = '';
+    String defaultVal = '';
+
+    if (docType == 'aadhaar') {
+      title = 'Verify Aadhaar';
+      hintText = 'Enter 12-digit Aadhaar number';
+      defaultVal = '123456789012';
+    } else if (docType == 'dl') {
+      title = 'Verify Driving Licence';
+      hintText = 'Enter Driving Licence number';
+      defaultVal = 'DL-1420110012345';
+    } else if (docType == 'rc') {
+      title = 'Verify Vehicle RC';
+      hintText = 'Enter Vehicle RC number';
+      defaultVal = 'DL01AB1234';
+    }
+
+    controller.text = defaultVal;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        bool isSubmitting = false;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Text(title, style: AppTextStyles.h2.copyWith(fontSize: 18)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Sandbox Verification Environment',
+                    style: AppTextStyles.caption.copyWith(color: AppColors.mediumGray),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: controller,
+                    decoration: InputDecoration(
+                      hintText: hintText,
+                      filled: true,
+                      fillColor: AppColors.softGray,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryTeal,
+                    foregroundColor: AppColors.midnightBlue,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          setDialogState(() => isSubmitting = true);
+                          try {
+                            UserProfile updated;
+                            if (docType == 'aadhaar') {
+                              updated = await VerificationService.instance.verifyAadhaar(controller.text);
+                            } else if (docType == 'dl') {
+                              updated = await VerificationService.instance.verifyDrivingLicence(controller.text);
+                            } else {
+                              updated = await VerificationService.instance.verifyVehicleRc(controller.text);
+                            }
+
+                            if (!mounted) return;
+                            Navigator.pop(ctx);
+
+                            setState(() {
+                              _profile = updated;
+                            });
+
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('$title verified successfully!'),
+                                backgroundColor: AppColors.midnightBlue,
+                              ),
+                            );
+                          } catch (e) {
+                            setDialogState(() => isSubmitting = false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Verification failed: $e'),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                          }
+                        },
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppColors.midnightBlue,
+                          ),
+                        )
+                      : const Text('Verify Now', style: TextStyle(fontWeight: FontWeight.w800)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = _profile ?? AuthService.instance.currentProfile;
@@ -68,6 +191,11 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
     final email = profile?.email ?? 'Not signed in';
     final avatarUrl = profile?.avatarUrl;
     final initialLetter = displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U';
+
+    final aadhaarVerified = profile?.aadhaarVerified ?? false;
+    final dlVerified = profile?.dlVerified ?? false;
+    final rcVerified = profile?.vehicleRcVerified ?? false;
+    final allVerified = aadhaarVerified && dlVerified && rcVerified;
 
     return Scaffold(
       backgroundColor: AppColors.softGray,
@@ -168,12 +296,12 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                     decoration: BoxDecoration(
-                      color: profile?.aadhaarVerified == true
+                      color: allVerified
                           ? AppColors.verifiedGreen.withAlpha(50)
                           : AppColors.amberPoll.withAlpha(50),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: profile?.aadhaarVerified == true
+                        color: allVerified
                             ? AppColors.verifiedGreen
                             : AppColors.amberPoll,
                         width: 1,
@@ -183,21 +311,21 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          profile?.aadhaarVerified == true
+                          allVerified
                               ? Icons.verified_user_rounded
                               : Icons.gpp_maybe_rounded,
                           size: 16,
-                          color: profile?.aadhaarVerified == true
+                          color: allVerified
                               ? AppColors.verifiedGreen
                               : AppColors.amberPoll,
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          profile?.aadhaarVerified == true
-                              ? 'Verified Trust Commuter'
-                              : 'Pending Verification',
+                          allVerified
+                              ? 'Fully Verified Host Commuter'
+                              : 'Verification Pending',
                           style: AppTextStyles.caption.copyWith(
-                            color: profile?.aadhaarVerified == true
+                            color: allVerified
                                 ? AppColors.verifiedGreen
                                 : AppColors.amberPoll,
                             fontWeight: FontWeight.w700,
@@ -227,7 +355,8 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
               icon: Icons.fingerprint_rounded,
               title: 'DigiLocker Aadhaar',
               subtitle: profile?.maskedAadhaar ?? 'National identity verification',
-              isVerified: profile?.aadhaarVerified ?? false,
+              isVerified: aadhaarVerified,
+              onVerify: () => _openVerificationDialog('aadhaar'),
             ),
 
             const SizedBox(height: 12),
@@ -237,7 +366,8 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
               icon: Icons.badge_rounded,
               title: 'Driving License',
               subtitle: 'Required for Host / Rider mode',
-              isVerified: profile?.dlVerified ?? false,
+              isVerified: dlVerified,
+              onVerify: () => _openVerificationDialog('dl'),
             ),
 
             const SizedBox(height: 12),
@@ -247,7 +377,8 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
               icon: Icons.directions_car_rounded,
               title: 'Vehicle Registration (RC)',
               subtitle: 'Required for offering community rides',
-              isVerified: profile?.vehicleRcVerified ?? false,
+              isVerified: rcVerified,
+              onVerify: () => _openVerificationDialog('rc'),
             ),
 
             const SizedBox(height: 32),
@@ -299,6 +430,7 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
     required String title,
     required String subtitle,
     required bool isVerified,
+    required VoidCallback onVerify,
   }) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -349,34 +481,58 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: isVerified
-                  ? AppColors.verifiedGreen.withAlpha(30)
-                  : AppColors.mediumGray.withAlpha(20),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  isVerified ? Icons.check_circle_rounded : Icons.pending_rounded,
-                  size: 14,
-                  color: isVerified ? AppColors.verifiedGreen : AppColors.mediumGray,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  isVerified ? 'Verified' : 'Pending',
-                  style: AppTextStyles.caption.copyWith(
-                    color: isVerified ? AppColors.verifiedGreen : AppColors.mediumGray,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 11,
+          const SizedBox(width: 8),
+
+          if (isVerified)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.verifiedGreen.withAlpha(30),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.check_circle_rounded,
+                    size: 14,
+                    color: AppColors.verifiedGreen,
                   ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Verified',
+                    style: AppTextStyles.caption.copyWith(
+                      color: AppColors.verifiedGreen,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryTeal,
+                foregroundColor: AppColors.midnightBlue,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
                 ),
-              ],
+              ),
+              onPressed: onVerify,
+              child: Text(
+                'Verify Now',
+                style: AppTextStyles.caption.copyWith(
+                  color: AppColors.midnightBlue,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );

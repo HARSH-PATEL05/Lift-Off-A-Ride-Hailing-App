@@ -27,4 +27,11 @@ class ApiEndpoints {
   /// Body: { "aadhaar_number": "123456789012" }
   /// Response: { verified: true/false, message: "...", user_profile: {...} }
   static const String verifyAadhaar = '/verification/aadhaar';
+  static const String verifyDL = '/verification/driving-licence';
+  static const String verifyRC = '/verification/vehicle-rc';
+
+  // ─── Rides ───
+  /// POST: Publish a new commute route.
+  /// GET: List active rides.
+  static const String rides = '/rides';
 }

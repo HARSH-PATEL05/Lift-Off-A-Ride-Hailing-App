@@ -4,6 +4,7 @@ import 'core/theme/app_colors.dart';
 import 'core/theme/app_text_styles.dart';
 import 'features/home/screens/home_screen.dart';
 import 'features/host/screens/rider_host_dashboard.dart';
+import 'features/trips/screens/my_trips_screen.dart';
 import 'features/auth/screens/trust_vault_screen.dart';
 
 /// Main LiftOff App Shell with Authenticated Navigation
@@ -30,11 +31,7 @@ class _AppShellState extends State<AppShell> {
     _screens = [
       const HomeScreen(),
       const RiderHostDashboard(),
-      const _PlaceholderScreen(
-        icon: Icons.alt_route_rounded,
-        title: 'My Shared Commutes',
-        subtitle: 'Track your upcoming, active and past shared trips',
-      ),
+      const MyTripsScreen(),
       TrustVaultScreen(userProfile: widget.userProfile),
     ];
   }

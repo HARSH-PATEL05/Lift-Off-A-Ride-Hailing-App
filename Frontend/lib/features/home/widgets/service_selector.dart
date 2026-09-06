@@ -3,9 +3,12 @@ import 'package:flutter/services.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/data/mock_data.dart';
+import '../../../core/api/api_client.dart';
+import '../../../core/api/api_endpoints.dart';
+import '../../../core/models/posted_ride.dart';
 
 /// Horizontal & vertical feed of Matching Community Shared Rides (Hosts)
-class ServiceSelector extends StatelessWidget {
+class ServiceSelector extends StatefulWidget {
   final String selectedServiceId;
   final ValueChanged<String> onServiceSelected;
   final VoidCallback onBook;
@@ -18,17 +21,59 @@ class ServiceSelector extends StatelessWidget {
   });
 
   @override
+  State<ServiceSelector> createState() => _ServiceSelectorState();
+}
+
+class _ServiceSelectorState extends State<ServiceSelector> {
+  List<CommunityRide> _liveRides = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchLiveRides();
+  }
+
+  Future<void> _fetchLiveRides() async {
+    try {
+      final response = await ApiClient.instance.get(ApiEndpoints.rides);
+      if (response is List) {
+        final parsed = response
+            .map((item) => PostedRide.fromJson(item as Map<String, dynamic>).toCommunityRide())
+            .toList();
+        if (mounted) {
+          setState(() {
+            _liveRides = parsed;
+            _isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      debugPrint('Error fetching live rides: $e');
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Combine live backend rides + mock data fallback
+    final allRides = [..._liveRides, ...MockData.communityRides];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Text(
-              'Departing Community Rides',
-              style: AppTextStyles.h3.copyWith(fontSize: 16),
+            Expanded(
+              child: Text(
+                'Departing Community Rides',
+                style: AppTextStyles.h3.copyWith(fontSize: 15),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-            const Spacer(),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
@@ -44,7 +89,7 @@ class ServiceSelector extends StatelessWidget {
                   ),
                   const SizedBox(width: 3),
                   Text(
-                    '${MockData.communityRides.length} matching',
+                    '${allRides.length} matching',
                     style: AppTextStyles.caption.copyWith(
                       color: AppColors.primaryTealDark,
                       fontWeight: FontWeight.w700,
@@ -53,34 +98,54 @@ class ServiceSelector extends StatelessWidget {
                 ],
               ),
             ),
+            IconButton(
+              icon: const Icon(Icons.refresh_rounded, size: 18, color: AppColors.midnightBlue),
+              onPressed: () {
+                setState(() => _isLoading = true);
+                _fetchLiveRides();
+              },
+              tooltip: 'Refresh Rides',
+            ),
           ],
         ),
         const SizedBox(height: 12),
 
-        // List of Community Ride Cards
-        ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: MockData.communityRides.length,
-          separatorBuilder: (_, a) => const SizedBox(height: 12),
-          itemBuilder: (context, index) {
-            final ride = MockData.communityRides[index];
-            final isSelected = ride.id == selectedServiceId;
-            return _CommunityRideCard(
-              ride: ride,
-              isSelected: isSelected,
-              onTap: () {
-                HapticFeedback.selectionClick();
-                onServiceSelected(ride.id);
-                onBook();
-              },
-            );
-          },
-        ),
+        if (_isLoading && _liveRides.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Center(
+              child: CircularProgressIndicator(
+                color: AppColors.primaryTealDark,
+                strokeWidth: 2,
+              ),
+            ),
+          )
+        else
+          // List of Community Ride Cards
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: allRides.length,
+            separatorBuilder: (_, a) => const SizedBox(height: 12),
+            itemBuilder: (context, index) {
+              final ride = allRides[index];
+              final isSelected = ride.id == widget.selectedServiceId;
+              return _CommunityRideCard(
+                ride: ride,
+                isSelected: isSelected,
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  widget.onServiceSelected(ride.id);
+                  widget.onBook();
+                },
+              );
+            },
+          ),
       ],
     );
   }
 }
+
 
 class _CommunityRideCard extends StatelessWidget {
   final CommunityRide ride;
