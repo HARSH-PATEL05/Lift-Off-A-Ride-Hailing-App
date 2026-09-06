@@ -1,9 +1,11 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/data/mock_data.dart';
+import '../../../core/services/auth_service.dart';
 
 /// Floating Top Bar for LiftOff with Dual Mode Switcher (Traveller ↔ Rider Mode)
 class FloatingTopBar extends StatelessWidget {
@@ -117,49 +119,76 @@ class FloatingTopBar extends StatelessWidget {
                 const SizedBox(width: 10),
 
                 // User Avatar with Verified Badge
-                Stack(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        gradient: AppColors.navyGradient,
-                        shape: BoxShape.circle,
-                        boxShadow: const [
-                          BoxShadow(
-                            color: AppColors.shadowLight,
-                            blurRadius: 12,
-                            offset: Offset(0, 3),
+                Builder(
+                  builder: (context) {
+                    final profile = AuthService.instance.currentProfile;
+                    final avatarUrl = profile?.avatarUrl;
+                    final name = profile?.fullName ?? profile?.email ?? MockData.currentUser.name;
+                    final initial = name.isNotEmpty ? name[0].toUpperCase() : 'U';
+                    final isVerified = profile?.aadhaarVerified ?? false;
+
+                    return Stack(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            gradient: AppColors.navyGradient,
+                            shape: BoxShape.circle,
+                            boxShadow: const [
+                              BoxShadow(
+                                color: AppColors.shadowLight,
+                                blurRadius: 12,
+                                offset: Offset(0, 3),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      child: Center(
-                        child: Text(
-                          MockData.currentUser.name[0],
-                          style: AppTextStyles.h3.copyWith(
-                            color: AppColors.primaryTeal,
-                            fontWeight: FontWeight.w800,
+                          child: ClipOval(
+                            child: avatarUrl != null && avatarUrl.isNotEmpty
+                                ? CachedNetworkImage(
+                                    imageUrl: avatarUrl,
+                                    fit: BoxFit.cover,
+                                    errorWidget: (context, url, error) => Center(
+                                      child: Text(
+                                        initial,
+                                        style: AppTextStyles.h3.copyWith(
+                                          color: AppColors.primaryTeal,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                : Center(
+                                    child: Text(
+                                      initial,
+                                      style: AppTextStyles.h3.copyWith(
+                                        color: AppColors.primaryTeal,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
                           ),
                         ),
-                      ),
-                    ),
-                    Positioned(
-                      right: 0,
-                      bottom: 0,
-                      child: Container(
-                        padding: const EdgeInsets.all(2),
-                        decoration: const BoxDecoration(
-                          color: AppColors.white,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.check_circle_rounded,
-                          color: AppColors.verifiedGreen,
-                          size: 14,
-                        ),
-                      ),
-                    ),
-                  ],
+                        if (isVerified)
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: const BoxDecoration(
+                                color: AppColors.white,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.check_circle_rounded,
+                                color: AppColors.verifiedGreen,
+                                size: 14,
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
                 ),
               ],
             ),

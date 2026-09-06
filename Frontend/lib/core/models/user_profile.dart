@@ -19,6 +19,11 @@ class UserProfile {
   // Example: XXXX-XXXX-1234
   final String? maskedAadhaar;
 
+  // ─── Host Performance Stats ───
+  final double fuelRecoveredInr;
+  final int sharedCommutesCount;
+  final double co2SavedKg;
+
   // ─── Timestamp ───
 
   final DateTime createdAt;
@@ -32,6 +37,9 @@ class UserProfile {
     this.dlVerified = false,
     this.vehicleRcVerified = false,
     this.maskedAadhaar,
+    this.fuelRecoveredInr = 0.0,
+    this.sharedCommutesCount = 0,
+    this.co2SavedKg = 0.0,
     required this.createdAt,
   });
 
@@ -51,15 +59,22 @@ class UserProfile {
       aadhaarVerified:
           json['aadhaar_verified'] as bool? ?? false,
 
-      dlVerified:
-          json['driving_licence_verified'] as bool? ?? false,
+      dlVerified: (json['driving_licence_verified'] as bool?) ??
+          (json['dl_verified'] as bool?) ??
+          false,
 
-      vehicleRcVerified:
-          json['rc_verified'] as bool? ?? false,
+      vehicleRcVerified: (json['rc_verified'] as bool?) ??
+          (json['vehicle_rc_verified'] as bool?) ??
+          false,
 
       // Aadhaar masked value
       maskedAadhaar:
           json['masked_aadhaar'] as String?,
+
+      // Host Stats
+      fuelRecoveredInr: (json['fuel_recovered_inr'] as num?)?.toDouble() ?? 0.0,
+      sharedCommutesCount: (json['shared_commutes_count'] as int?) ?? 0,
+      co2SavedKg: (json['co2_saved_kg'] as num?)?.toDouble() ?? 0.0,
 
       // Backend timestamp
       createdAt: json['created_at'] != null
@@ -82,6 +97,10 @@ class UserProfile {
 
       'masked_aadhaar': maskedAadhaar,
 
+      'fuel_recovered_inr': fuelRecoveredInr,
+      'shared_commutes_count': sharedCommutesCount,
+      'co2_saved_kg': co2SavedKg,
+
       'created_at': createdAt.toIso8601String(),
     };
   }
@@ -98,6 +117,10 @@ class UserProfile {
     bool? vehicleRcVerified,
 
     String? maskedAadhaar,
+
+    double? fuelRecoveredInr,
+    int? sharedCommutesCount,
+    double? co2SavedKg,
 
     DateTime? createdAt,
   }) {
@@ -118,6 +141,15 @@ class UserProfile {
 
       maskedAadhaar:
           maskedAadhaar ?? this.maskedAadhaar,
+
+      fuelRecoveredInr:
+          fuelRecoveredInr ?? this.fuelRecoveredInr,
+
+      sharedCommutesCount:
+          sharedCommutesCount ?? this.sharedCommutesCount,
+
+      co2SavedKg:
+          co2SavedKg ?? this.co2SavedKg,
 
       createdAt:
           createdAt ?? this.createdAt,

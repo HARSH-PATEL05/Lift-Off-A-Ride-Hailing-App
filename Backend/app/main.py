@@ -10,9 +10,11 @@ from app.db.models.user import User
 from app.db.models.aadhar_document import Aadhaar
 from app.db.models.driving_licence import DrivingLicence
 from app.db.models.vehicle_rc import VehicleRC
+from app.db.models.ride import Ride
+from app.db.models.host_stat import HostStat
 
 
-from app.routes import auth, verification
+from app.routes import auth, verification, rides
 
 
 Base.metadata.create_all(bind=engine)
@@ -30,7 +32,9 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(auth.user_router)
 app.include_router(verification.router)
+app.include_router(rides.router)
 
 @app.get("/")
 def home():

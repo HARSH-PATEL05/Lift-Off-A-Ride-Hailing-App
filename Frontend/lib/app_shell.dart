@@ -1,12 +1,20 @@
 import 'package:flutter/material.dart';
+import 'core/models/user_profile.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_text_styles.dart';
 import 'features/home/screens/home_screen.dart';
 import 'features/host/screens/rider_host_dashboard.dart';
+import 'features/trips/screens/my_trips_screen.dart';
+import 'features/auth/screens/trust_vault_screen.dart';
 
 /// Main LiftOff App Shell with Authenticated Navigation
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  final UserProfile? userProfile;
+
+  const AppShell({
+    super.key,
+    this.userProfile,
+  });
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -15,20 +23,18 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = [
-    const HomeScreen(),
-    const RiderHostDashboard(),
-    const _PlaceholderScreen(
-      icon: Icons.alt_route_rounded,
-      title: 'My Shared Commutes',
-      subtitle: 'Track your upcoming, active and past shared trips',
-    ),
-    const _PlaceholderScreen(
-      icon: Icons.verified_user_rounded,
-      title: 'Verification Vault & Profile',
-      subtitle: 'DigiLocker Aadhaar, Driving License & RC validation',
-    ),
-  ];
+  late final List<Widget> _screens;
+
+  @override
+  void initState() {
+    super.initState();
+    _screens = [
+      const HomeScreen(),
+      const RiderHostDashboard(),
+      const MyTripsScreen(),
+      TrustVaultScreen(userProfile: widget.userProfile),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {

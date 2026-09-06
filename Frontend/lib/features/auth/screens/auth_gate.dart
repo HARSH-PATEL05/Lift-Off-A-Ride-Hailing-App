@@ -265,8 +265,9 @@ class _AuthGateState extends State<AuthGate> {
         );
 
       case _AuthPhase.dashboard:
-        return const AppShell(
-          key: ValueKey('dashboard'),
+        return AppShell(
+          key: const ValueKey('dashboard'),
+          userProfile: _userProfile,
         );
     }
   }

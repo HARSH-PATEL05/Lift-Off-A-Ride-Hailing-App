@@ -8,6 +8,7 @@ from app.db.models.user import User
 from app.db.models.aadhar_document import Aadhaar
 from app.db.models.driving_licence import DrivingLicence
 from app.db.models.vehicle_rc import VehicleRC
+from app.db.models.host_stat import HostStat
 
 from app.db.schemas.verification import (
     AadhaarVerificationRequest,
@@ -27,6 +28,37 @@ from app.services.Authentication.vehicle_rc.provider import (
     get_vehicle_rc_provider,
 )
 from app.core.security import sensitive_data_encryption
+
+
+def _build_user_profile_response(db: Session, user: User) -> dict:
+    """Helper to return accurate live status of all 3 verification documents."""
+    aadhaar = db.query(Aadhaar).filter(Aadhaar.user_id == user.id).first()
+    dl = db.query(DrivingLicence).filter(DrivingLicence.user_id == user.id).first()
+    rc = db.query(VehicleRC).filter(VehicleRC.user_id == user.id).first()
+    stat = db.query(HostStat).filter(HostStat.user_id == user.id).first()
+
+    aadhaar_verified = aadhaar.aadhaar_verified if aadhaar else False
+    dl_verified = dl.dl_verified if dl else False
+    rc_verified = rc.rc_verified if rc else False
+
+    masked_aadhaar = f"XXXX-XXXX-{aadhaar.aadhaar_last_four}" if aadhaar else None
+
+    return {
+        "user_id": str(user.supabase_user_id),
+        "email": user.email,
+        "full_name": user.full_name,
+        "avatar_url": user.avatar_url,
+        "aadhaar_verified": aadhaar_verified,
+        "driving_licence_verified": dl_verified,
+        "dl_verified": dl_verified,
+        "rc_verified": rc_verified,
+        "vehicle_rc_verified": rc_verified,
+        "masked_aadhaar": masked_aadhaar,
+        "fuel_recovered_inr": stat.fuel_recovered_inr if stat else 0.0,
+        "shared_commutes_count": stat.shared_commutes_count if stat else 0,
+        "co2_saved_kg": stat.co2_saved_kg if stat else 0.0,
+        "created_at": user.created_at.isoformat(),
+    }
 
 
 router = APIRouter(
@@ -207,33 +239,10 @@ async def verify_aadhaar(
     # ─────────────────────────────────────────────
 
     return {
-    "verified": True,
-    "message": result["message"],
-
-    "user_profile": {
-        "user_id": str(user.supabase_user_id),
-
-        "email": user.email,
-
-        "full_name": user.full_name,
-
-        "avatar_url": user.avatar_url,
-
-        "aadhaar_verified": aadhaar_document.aadhaar_verified,
-
-        # DL verification will be connected later
-        "dl_verified": False,
-
-        # RC verification will be connected later
-        "vehicle_rc_verified": False,
-
-        "masked_aadhaar": (
-            f"XXXX-XXXX-{aadhaar_document.aadhaar_last_four}"
-        ),
-
-        "created_at": user.created_at.isoformat(),
-    },
-}
+        "verified": True,
+        "message": result["message"],
+        "user_profile": _build_user_profile_response(db, user),
+    }
 
 @router.post("/driving-licence")
 async def verify_driving_licence(
@@ -371,24 +380,7 @@ async def verify_driving_licence(
     return {
         "verified": True,
         "message": result["message"],
-
-        "user_profile": {
-            "user_id": str(user.supabase_user_id),
-            "email": user.email,
-            "full_name": user.full_name,
-            "avatar_url": user.avatar_url,
-
-            # Get Aadhaar status later dynamically
-            # "aadhaar_verified": False,
-
-            "dl_verified": dl_document.dl_verified,
-
-            "vehicle_rc_verified": False,
-
-            # "masked_aadhaar": None,
-
-            "created_at": user.created_at.isoformat(),
-        },
+        "user_profile": _build_user_profile_response(db, user),
     }
 @router.post("/vehicle-rc")
 async def verify_vehicle_rc(
@@ -519,7 +511,7 @@ async def verify_vehicle_rc(
     print("Document ID:", rc_document.id)
     print(
         "RC Verified:",
-        rc_document.vehicle_rc_verified,
+        rc_document.rc_verified,
     )
     print("========================================\n")
 
@@ -530,24 +522,5 @@ async def verify_vehicle_rc(
     return {
         "verified": True,
         "message": result["message"],
-
-        "user_profile": {
-            "user_id": str(user.supabase_user_id),
-            "email": user.email,
-            "full_name": user.full_name,
-            "avatar_url": user.avatar_url,
-
-            # Temporary values — we'll make these
-            # dynamic after all verification routes work.
-            # "aadhaar_verified": False,
-            "dl_verified": False,
-
-            "vehicle_rc_verified": (
-                rc_document.vehicle_rc_verified
-            ),
-
-            # "masked_aadhaar": None,
-
-            "created_at": user.created_at.isoformat(),
-        },
+        "user_profile": _build_user_profile_response(db, user),
     }
