@@ -44,6 +44,9 @@ dependencies:
   # Typography
   google_fonts: ^6.2.1
 
+  # HTTP Client for FastAPI Backend
+  http: ^1.2.0
+
   # UI Components & Animations
   smooth_page_indicator: ^1.2.0+3
   cached_network_image: ^3.4.1
