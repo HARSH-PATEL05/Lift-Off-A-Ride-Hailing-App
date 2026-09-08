@@ -37,18 +37,18 @@ dependencies:
   supabase_flutter: ^2.9.1
 
   # Map & Location rendering
-  google_maps_flutter: ^2.10.0
+  google_maps_flutter: ^2.12.3
   geolocator: ^13.0.2
 
   # Typography
   google_fonts: ^6.2.1
 
   # HTTP Client for FastAPI Backend
-  http: ^1.2.0
+  http: ^1.2.2
 
   # UI Components & Animations
   smooth_page_indicator: ^1.2.0+3
-  cached_network_image: ^3.4.1
+  cached_network_image: ^4.0.0
   flutter_svg: ^2.0.16
   shimmer: ^3.0.0
 dev_dependencies:

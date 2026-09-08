@@ -1,19 +1,174 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../../../core/services/google_places_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
-/// Route Corridor Search Widget with Quick Filters (Women Only, Verified Hosts, Date, Seats)
+/// Identifies which location field is currently active.
+enum ActiveSearchField {
+  source,
+  destination,
+}
+
+/// Route Corridor Search Widget.
+///
+/// Handles:
+/// - Source autocomplete
+/// - Destination autocomplete
+/// - Google Places live suggestions
+/// - Fully touchable suggestion tiles
+/// - Source/Destination selection
+/// - Route search activation
+/// - Select location from map callbacks
+/// - Quick filters
 class SearchBarWidget extends StatefulWidget {
   final ValueChanged<String>? onFilterChanged;
 
-  const SearchBarWidget({super.key, this.onFilterChanged});
+  /// Initial source text passed from parent (e.g. from Map or previous search)
+  final String? initialSource;
+
+  /// Initial destination text passed from parent (e.g. from Map or previous search)
+  final String? initialDestination;
+
+  /// Whether route coordinates/directions are currently being searched
+  final bool isSearchingRoute;
+
+  /// Called when the user selects a source suggestion.
+  final ValueChanged<PlaceSuggestion>? onSourceSelected;
+
+  /// Called when the user selects a destination suggestion.
+  final ValueChanged<PlaceSuggestion>? onDestinationSelected;
+
+  /// Called when the source location is selected, providing its LatLng.
+  final ValueChanged<LatLng>? onSourceLocationSelected;
+  /// Called when the destination location is selected, providing its LatLng.
+  final ValueChanged<LatLng>? onDestinationLocationSelected;
+
+  /// Called when both source and destination are selected
+  /// and the user presses "Search Route".
+  final void Function(
+    LatLng source,
+    LatLng destination,
+    String sourceName,
+    String destinationName,
+  )? onRouteSearch;
+
+  /// Called when user wants to select source directly from map.
+  final VoidCallback? onSelectSourceFromMap;
+
+  /// Called when user wants to select destination directly from map.
+  final VoidCallback? onSelectDestinationFromMap;
+
+  /// Route distance and duration to display above filters when route is calculated
+  final String? routeDistance;
+  final String? routeDuration;
+
+  const SearchBarWidget({
+    super.key,
+    this.onFilterChanged,
+    this.initialSource,
+    this.initialDestination,
+    this.isSearchingRoute = false,
+    this.routeDistance,
+    this.routeDuration,
+    this.onSourceSelected,
+    this.onDestinationSelected,
+    this.onSourceLocationSelected,
+    this.onDestinationLocationSelected,
+    this.onRouteSearch,
+    this.onSelectSourceFromMap,
+    this.onSelectDestinationFromMap,
+  });
 
   @override
-  State<SearchBarWidget> createState() => _SearchBarWidgetState();
+  State<SearchBarWidget> createState() =>
+      _SearchBarWidgetState();
 }
 
-class _SearchBarWidgetState extends State<SearchBarWidget> {
+class _SearchBarWidgetState
+    extends State<SearchBarWidget>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+  // ─────────────────────────────────────────────
+  // CONTROLLERS
+  // ─────────────────────────────────────────────
+
+  final TextEditingController _sourceController =
+      TextEditingController();
+
+  final TextEditingController _destinationController =
+      TextEditingController();
+
+  // ─────────────────────────────────────────────
+  // FOCUS
+  // ─────────────────────────────────────────────
+
+  final FocusNode _sourceFocusNode =
+      FocusNode();
+
+  final FocusNode _destinationFocusNode =
+      FocusNode();
+
+  // ─────────────────────────────────────────────
+  // OVERLAY ANCHORS
+  // ─────────────────────────────────────────────
+
+  final LayerLink _sourceLayerLink =
+      LayerLink();
+
+  final LayerLink _destinationLayerLink =
+      LayerLink();
+
+  OverlayEntry? _suggestionOverlay;
+
+  // ─────────────────────────────────────────────
+  // TIMERS
+  // ─────────────────────────────────────────────
+
+  Timer? _sourceDebounce;
+
+  Timer? _destinationDebounce;
+
+  Timer? _hideOverlayTimer;
+
+  // ─────────────────────────────────────────────
+  // AUTOCOMPLETE STATE
+  // ─────────────────────────────────────────────
+
+  List<PlaceSuggestion> _suggestions = [];
+
+  List<PlaceSuggestion> get suggestions => _suggestions;
+
+  bool _isLoading = false;
+
+  ActiveSearchField? _activeField;
+
+  /// Prevents old API responses from replacing
+  /// newer autocomplete results.
+  int _searchRequestId = 0;
+
+  /// Prevent controller listeners from clearing
+  /// selected places while we update the fields
+  /// programmatically.
+  bool _isApplyingSelection = false;
+
+  // ─────────────────────────────────────────────
+  // SELECTED PLACES
+  // ─────────────────────────────────────────────
+
+  PlaceSuggestion? _selectedSource;
+
+  PlaceSuggestion? _selectedDestination;
+
+  // ─────────────────────────────────────────────
+  // FILTERS
+  // ─────────────────────────────────────────────
+
   String _selectedFilter = 'All';
 
   final List<String> _filters = [
@@ -24,187 +179,1476 @@ class _SearchBarWidgetState extends State<SearchBarWidget> {
     'Strict Consent 🗳️',
   ];
 
+  bool _localSearching = false;
+
+  // ─────────────────────────────────────────────
+  // GETTERS
+  // ─────────────────────────────────────────────
+
+  bool get _canSearchRoute {
+    final hasSource = _selectedSource != null ||
+        _sourceController.text.trim().isNotEmpty;
+    final hasDestination = _selectedDestination != null ||
+        _destinationController.text.trim().isNotEmpty;
+    return hasSource && hasDestination;
+  }
+
+  // ─────────────────────────────────────────────
+  // INITIALIZATION & LIFECYCLE
+  // ─────────────────────────────────────────────
+
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Two connected inputs: Pickup Node & Destination
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: AppColors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.borderGray, width: 1.5),
-            boxShadow: const [
-              BoxShadow(
-                color: AppColors.shadowLight,
-                blurRadius: 16,
-                offset: Offset(0, 4),
+  void initState() {
+    super.initState();
+
+    if (widget.initialSource != null && widget.initialSource!.isNotEmpty) {
+      _sourceController.text = widget.initialSource!;
+    }
+    if (widget.initialDestination != null &&
+        widget.initialDestination!.isNotEmpty) {
+      _destinationController.text = widget.initialDestination!;
+    }
+
+    _sourceFocusNode.addListener(
+      _handleSourceFocus,
+    );
+
+    _destinationFocusNode.addListener(
+      _handleDestinationFocus,
+    );
+
+    _sourceController.addListener(
+      _onSourceChanged,
+    );
+
+    _destinationController.addListener(
+      _onDestinationChanged,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant SearchBarWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.initialSource != null &&
+        widget.initialSource != _sourceController.text &&
+        widget.initialSource != oldWidget.initialSource) {
+      _isApplyingSelection = true;
+      _sourceController.text = widget.initialSource!;
+      _isApplyingSelection = false;
+    }
+
+    if (widget.initialDestination != null &&
+        widget.initialDestination != _destinationController.text &&
+        widget.initialDestination != oldWidget.initialDestination) {
+      _isApplyingSelection = true;
+      _destinationController.text = widget.initialDestination!;
+      _isApplyingSelection = false;
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // SOURCE FOCUS
+  // ─────────────────────────────────────────────
+
+  void _handleSourceFocus() {
+    if (_sourceFocusNode.hasFocus) {
+      _hideOverlayTimer?.cancel();
+
+      setState(() {
+        _activeField =
+            ActiveSearchField.source;
+      });
+
+      final text =
+          _sourceController.text.trim();
+
+      if (text.length >= 2) {
+        _searchPlaces(
+          text,
+          ActiveSearchField.source,
+        );
+      }
+
+      return;
+    }
+
+    _scheduleOverlayHide();
+  }
+
+  // ─────────────────────────────────────────────
+  // DESTINATION FOCUS
+  // ─────────────────────────────────────────────
+
+  void _handleDestinationFocus() {
+    if (_destinationFocusNode.hasFocus) {
+      _hideOverlayTimer?.cancel();
+
+      setState(() {
+        _activeField =
+            ActiveSearchField.destination;
+      });
+
+      final text =
+          _destinationController.text.trim();
+
+      if (text.length >= 2) {
+        _searchPlaces(
+          text,
+          ActiveSearchField.destination,
+        );
+      }
+
+      return;
+    }
+
+    _scheduleOverlayHide();
+  }
+
+  // ─────────────────────────────────────────────
+  // OVERLAY HIDE
+  // ─────────────────────────────────────────────
+
+  void _scheduleOverlayHide() {
+    _hideOverlayTimer?.cancel();
+
+    _hideOverlayTimer = Timer(
+      const Duration(milliseconds: 250),
+      () {
+        if (!mounted) return;
+
+        if (!_sourceFocusNode.hasFocus &&
+            !_destinationFocusNode.hasFocus) {
+          _removeSuggestionOverlay();
+        }
+      },
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // SOURCE INPUT CHANGE
+  // ─────────────────────────────────────────────
+
+  void _onSourceChanged() {
+    if (_isApplyingSelection) {
+      return;
+    }
+
+    if (_selectedSource != null) {
+      setState(() {
+        _selectedSource = null;
+      });
+    }
+
+    _sourceDebounce?.cancel();
+
+    final input =
+        _sourceController.text.trim();
+
+    if (input.length < 2) {
+      _clearSuggestions();
+      return;
+    }
+
+    _sourceDebounce = Timer(
+      const Duration(milliseconds: 350),
+      () {
+        if (_activeField ==
+            ActiveSearchField.source) {
+          _searchPlaces(
+            input,
+            ActiveSearchField.source,
+          );
+        }
+      },
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // DESTINATION INPUT CHANGE
+  // ─────────────────────────────────────────────
+
+  void _onDestinationChanged() {
+    if (_isApplyingSelection) {
+      return;
+    }
+
+    if (_selectedDestination != null) {
+      setState(() {
+        _selectedDestination = null;
+      });
+    }
+
+    _destinationDebounce?.cancel();
+
+    final input =
+        _destinationController.text.trim();
+
+    if (input.length < 2) {
+      _clearSuggestions();
+      return;
+    }
+
+    _destinationDebounce = Timer(
+      const Duration(milliseconds: 350),
+      () {
+        if (_activeField ==
+            ActiveSearchField.destination) {
+          _searchPlaces(
+            input,
+            ActiveSearchField.destination,
+          );
+        }
+      },
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // GOOGLE PLACES AUTOCOMPLETE
+  // ─────────────────────────────────────────────
+
+  Future<void> _searchPlaces(
+    String input,
+    ActiveSearchField field,
+  ) async {
+    final cleanInput =
+        input.trim();
+
+    if (cleanInput.length < 2) {
+      return;
+    }
+
+    final requestId =
+        ++_searchRequestId;
+
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
+    try {
+      final results =
+          await GooglePlacesService.instance
+              .autocomplete(cleanInput);
+
+      // Ignore stale API responses.
+      if (!mounted ||
+          requestId != _searchRequestId ||
+          _activeField != field) {
+        return;
+      }
+
+      setState(() {
+        _suggestions = results;
+      });
+
+      if (results.isNotEmpty) {
+        _showSuggestionOverlay(
+          field,
+          results,
+        );
+      } else {
+        _removeSuggestionOverlay();
+      }
+    } catch (e) {
+      debugPrint(
+        'Google Places autocomplete error: $e',
+      );
+
+      if (!mounted ||
+          requestId != _searchRequestId) {
+        return;
+      }
+
+      _clearSuggestions();
+    } finally {
+      if (mounted &&
+          requestId == _searchRequestId) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // SHOW SUGGESTION OVERLAY
+  // ─────────────────────────────────────────────
+
+  void _showSuggestionOverlay(
+    ActiveSearchField field,
+    List<PlaceSuggestion> results,
+  ) {
+    if (!mounted || results.isEmpty) {
+      return;
+    }
+
+    final LayerLink layerLink =
+        field == ActiveSearchField.source
+            ? _sourceLayerLink
+            : _destinationLayerLink;
+
+    // Remove previous overlay only.
+    // Do not clear suggestions here.
+    _removeSuggestionOverlayOnly();
+
+    final RenderBox? renderBox =
+        context.findRenderObject()
+            as RenderBox?;
+
+    final double width =
+        renderBox?.size.width ??
+            MediaQuery.of(context)
+                    .size
+                    .width -
+                40;
+
+    final List<PlaceSuggestion>
+        overlaySuggestions =
+        List<PlaceSuggestion>.from(results);
+
+    _suggestionOverlay = OverlayEntry(
+      builder: (overlayContext) {
+        return CompositedTransformFollower(
+          link: layerLink,
+          showWhenUnlinked: false,
+          targetAnchor:
+              Alignment.bottomLeft,
+          followerAnchor:
+              Alignment.topLeft,
+          offset:
+              const Offset(0, 8),
+          child: Material(
+            color: Colors.transparent,
+            child: SizedBox(
+              width: width,
+              child: _buildSuggestionBox(
+                field,
+                overlaySuggestions,
               ),
-            ],
+            ),
           ),
-          child: Column(
-            children: [
-              // Pickup Node Input
-              Row(
-                children: [
-                  Container(
-                    width: 12,
-                    height: 12,
-                    decoration: const BoxDecoration(
-                      color: AppColors.primaryTeal,
-                      shape: BoxShape.circle,
-                    ),
+        );
+      },
+    );
+
+    final overlay =
+        Overlay.of(
+      context,
+      rootOverlay: true,
+    );
+
+    overlay.insert(
+      _suggestionOverlay!,
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // REMOVE OVERLAY ONLY
+  // ─────────────────────────────────────────────
+
+  void _removeSuggestionOverlayOnly() {
+    _suggestionOverlay?.remove();
+    _suggestionOverlay = null;
+  }
+
+  // ─────────────────────────────────────────────
+  // REMOVE OVERLAY + CLEAR DATA
+  // ─────────────────────────────────────────────
+
+  void _removeSuggestionOverlay() {
+    _removeSuggestionOverlayOnly();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _suggestions = [];
+    });
+  }
+
+  // ─────────────────────────────────────────────
+  // CLEAR SUGGESTIONS
+  // ─────────────────────────────────────────────
+
+  void _clearSuggestions() {
+    _removeSuggestionOverlayOnly();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _suggestions = [];
+    });
+  }
+
+  // ─────────────────────────────────────────────
+  // SUGGESTION BOX
+  // ─────────────────────────────────────────────
+
+  Widget _buildSuggestionBox(
+    ActiveSearchField field,
+    List<PlaceSuggestion> suggestions,
+  ) {
+    return Material(
+      elevation: 14,
+      color: AppColors.white,
+      borderRadius:
+          BorderRadius.circular(18),
+      child: Container(
+        constraints:
+            const BoxConstraints(
+          maxHeight: 310,
+        ),
+        decoration: BoxDecoration(
+          color: AppColors.white,
+          borderRadius:
+              BorderRadius.circular(18),
+          border: Border.all(
+            color: AppColors.borderGray,
+          ),
+        ),
+        child: ListView.separated(
+          shrinkWrap: true,
+          padding:
+              const EdgeInsets.symmetric(
+            vertical: 6,
+          ),
+          physics:
+              const ClampingScrollPhysics(),
+          itemCount:
+              suggestions.length,
+          separatorBuilder:
+              (_, __) => Padding(
+            padding:
+                const EdgeInsets.only(
+              left: 68,
+            ),
+            child: Divider(
+              height: 1,
+              color:
+                  AppColors.borderGray,
+            ),
+          ),
+          itemBuilder:
+              (context, index) {
+            return _buildSuggestionItem(
+              suggestions[index],
+              field,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // FULLY TOUCHABLE SUGGESTION ITEM
+  // ─────────────────────────────────────────────
+
+  Widget _buildSuggestionItem(
+    PlaceSuggestion suggestion,
+    ActiveSearchField field,
+  ) {
+    final parts =
+        suggestion.description.split(',');
+
+    final primaryText =
+        parts.isNotEmpty
+            ? parts.first.trim()
+            : suggestion.description;
+
+    final secondaryText =
+        parts.length > 1
+            ? parts
+                .sublist(1)
+                .join(',')
+                .trim()
+            : '';
+
+    final isSource =
+        field ==
+            ActiveSearchField.source;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          _selectSuggestion(
+            suggestion,
+            field,
+          );
+        },
+        borderRadius:
+            BorderRadius.circular(12),
+        child: SizedBox(
+          width: double.infinity,
+          child: Padding(
+            padding:
+                const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 15,
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration:
+                      BoxDecoration(
+                    color: AppColors
+                        .primaryTealSurface,
+                    shape:
+                        BoxShape.circle,
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Meeting Node (Pickup)',
-                          style: AppTextStyles.caption.copyWith(
-                            color: AppColors.mediumGray,
-                            fontSize: 10,
-                          ),
+                  child: Icon(
+                    isSource
+                        ? Icons
+                            .trip_origin_rounded
+                        : Icons
+                            .location_on_outlined,
+                    color: isSource
+                        ? AppColors
+                            .primaryTealDark
+                        : AppColors
+                            .midnightBlue,
+                    size: 21,
+                  ),
+                ),
+
+                const SizedBox(
+                  width: 14,
+                ),
+
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment
+                            .start,
+                    children: [
+                      Text(
+                        primaryText,
+                        maxLines: 1,
+                        overflow:
+                            TextOverflow
+                                .ellipsis,
+                        style:
+                            AppTextStyles
+                                .label
+                                .copyWith(
+                          fontSize: 14,
+                          fontWeight:
+                              FontWeight
+                                  .w700,
                         ),
+                      ),
+
+                      if (secondaryText
+                          .isNotEmpty) ...[
+                        const SizedBox(
+                          height: 4,
+                        ),
+
                         Text(
-                          'Rajiv Chowk Metro Gate 2',
-                          style: AppTextStyles.label.copyWith(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
+                          secondaryText,
+                          maxLines: 2,
+                          overflow:
+                              TextOverflow
+                                  .ellipsis,
+                          style:
+                              AppTextStyles
+                                  .caption
+                                  .copyWith(
+                            fontSize: 11,
+                            color: AppColors
+                                .mediumGray,
                           ),
                         ),
                       ],
+                    ],
+                  ),
+                ),
+
+                const SizedBox(
+                  width: 8,
+                ),
+
+                const Icon(
+                  Icons.north_west_rounded,
+                  size: 18,
+                  color:
+                      AppColors.mediumGray,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // SELECT SUGGESTION
+  // ─────────────────────────────────────────────
+
+  void _selectSuggestion(
+    PlaceSuggestion suggestion,
+    ActiveSearchField field,
+  ) {
+    debugPrint(
+      'Selected suggestion: '
+      '${suggestion.description}',
+    );
+
+    HapticFeedback.selectionClick();
+
+    _hideOverlayTimer?.cancel();
+
+    // IMPORTANT:
+    // Remove overlay immediately but do not
+    // depend on focus or _activeField anymore.
+    _removeSuggestionOverlayOnly();
+
+    _isApplyingSelection = true;
+
+    if (field ==
+        ActiveSearchField.source) {
+      setState(() {
+        _selectedSource =
+            suggestion;
+
+        _sourceController.text =
+            suggestion.description;
+
+        _suggestions = [];
+      });
+
+      widget.onSourceSelected?.call(
+        suggestion,
+      );
+
+      _sourceFocusNode.unfocus();
+
+      _isApplyingSelection = false;
+
+      // Automatically move user
+      // to destination input.
+      Future.delayed(
+        const Duration(
+          milliseconds: 250,
+        ),
+        () {
+          if (!mounted) {
+            return;
+          }
+
+          _destinationFocusNode
+              .requestFocus();
+        },
+      );
+
+      return;
+    }
+
+    if (field ==
+        ActiveSearchField.destination) {
+      setState(() {
+        _selectedDestination =
+            suggestion;
+
+        _destinationController.text =
+            suggestion.description;
+
+        _suggestions = [];
+      });
+
+      widget.onDestinationSelected?.call(
+        suggestion,
+      );
+
+      _destinationFocusNode.unfocus();
+
+      _isApplyingSelection = false;
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // CLEAR SOURCE
+  // ─────────────────────────────────────────────
+
+  void _clearSource() {
+    _sourceDebounce?.cancel();
+
+    _isApplyingSelection = true;
+
+    _sourceController.clear();
+
+    _isApplyingSelection = false;
+
+    _removeSuggestionOverlayOnly();
+
+    setState(() {
+      _selectedSource = null;
+      _suggestions = [];
+      _activeField =
+          ActiveSearchField.source;
+    });
+
+    _sourceFocusNode.requestFocus();
+  }
+
+  // ─────────────────────────────────────────────
+  // CLEAR DESTINATION
+  // ─────────────────────────────────────────────
+
+  void _clearDestination() {
+    _destinationDebounce?.cancel();
+
+    _isApplyingSelection = true;
+
+    _destinationController.clear();
+
+    _isApplyingSelection = false;
+
+    _removeSuggestionOverlayOnly();
+
+    setState(() {
+      _selectedDestination = null;
+      _suggestions = [];
+      _activeField =
+          ActiveSearchField.destination;
+    });
+
+    _destinationFocusNode
+        .requestFocus();
+  }
+
+  // ─────────────────────────────────────────────
+  // SELECT SOURCE FROM MAP
+  // ─────────────────────────────────────────────
+
+  void _selectSourceFromMap() {
+    HapticFeedback.selectionClick();
+
+    _removeSuggestionOverlay();
+
+    _sourceFocusNode.unfocus();
+    _destinationFocusNode.unfocus();
+
+    widget.onSelectSourceFromMap
+        ?.call();
+  }
+
+  // ─────────────────────────────────────────────
+  // SELECT DESTINATION FROM MAP
+  // ─────────────────────────────────────────────
+
+  void _selectDestinationFromMap() {
+    HapticFeedback.selectionClick();
+
+    _removeSuggestionOverlay();
+
+    _sourceFocusNode.unfocus();
+    _destinationFocusNode.unfocus();
+
+    widget.onSelectDestinationFromMap
+        ?.call();
+  }
+
+  // ─────────────────────────────────────────────
+  // SEARCH ROUTE
+  // ─────────────────────────────────────────────
+
+  Future<void> _searchRoute() async {
+    if (!_canSearchRoute || _localSearching || widget.isSearchingRoute) {
+      return;
+    }
+
+    HapticFeedback.mediumImpact();
+
+    _removeSuggestionOverlay();
+
+    _sourceFocusNode.unfocus();
+    _destinationFocusNode.unfocus();
+
+    setState(() {
+      _localSearching = true;
+    });
+
+    try {
+      LatLng? sourceLatLng;
+      if (_selectedSource != null) {
+        sourceLatLng = await GooglePlacesService.instance
+            .getPlaceLocation(_selectedSource!.placeId);
+      } else if (_sourceController.text.trim().isNotEmpty) {
+        final suggestions = await GooglePlacesService.instance
+            .autocomplete(_sourceController.text.trim());
+        if (suggestions.isNotEmpty) {
+          sourceLatLng = await GooglePlacesService.instance
+              .getPlaceLocation(suggestions.first.placeId);
+        }
+      }
+
+      LatLng? destinationLatLng;
+      if (_selectedDestination != null) {
+        destinationLatLng = await GooglePlacesService.instance
+            .getPlaceLocation(_selectedDestination!.placeId);
+      } else if (_destinationController.text.trim().isNotEmpty) {
+        final suggestions = await GooglePlacesService.instance
+            .autocomplete(_destinationController.text.trim());
+        if (suggestions.isNotEmpty) {
+          destinationLatLng = await GooglePlacesService.instance
+              .getPlaceLocation(suggestions.first.placeId);
+        }
+      }
+
+      if (sourceLatLng != null && destinationLatLng != null) {
+        widget.onRouteSearch?.call(
+          sourceLatLng,
+          destinationLatLng,
+          _sourceController.text.trim(),
+          _destinationController.text.trim(),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error fetching place locations: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _localSearching = false;
+        });
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // DISPOSE
+  // ─────────────────────────────────────────────
+
+  @override
+  void dispose() {
+    _sourceDebounce?.cancel();
+    _destinationDebounce?.cancel();
+    _hideOverlayTimer?.cancel();
+
+    _removeSuggestionOverlayOnly();
+
+    _sourceController.dispose();
+    _destinationController.dispose();
+
+    _sourceFocusNode.dispose();
+    _destinationFocusNode.dispose();
+
+    super.dispose();
+  }
+
+  // ─────────────────────────────────────────────
+  // BUILD LOCATION INPUT
+  // ─────────────────────────────────────────────
+
+  Widget _buildLocationInput({
+    required ActiveSearchField field,
+    required TextEditingController controller,
+    required FocusNode focusNode,
+    required LayerLink layerLink,
+    required String label,
+    required String hint,
+    required Color dotColor,
+    required Color labelColor,
+    required IconData mapIcon,
+    required VoidCallback onSelectFromMap,
+    required VoidCallback onClear,
+    required TextInputAction textInputAction,
+    VoidCallback? onSubmitted,
+  }) {
+    final isFocused =
+        focusNode.hasFocus;
+
+    final hasText =
+        controller.text.isNotEmpty;
+
+    final isSource =
+        field ==
+            ActiveSearchField.source;
+
+    return CompositedTransformTarget(
+      link: layerLink,
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(
+          horizontal: 2,
+          vertical: 4,
+        ),
+        decoration:
+            BoxDecoration(
+          borderRadius:
+              BorderRadius.circular(12),
+          color: isFocused
+              ? AppColors
+                  .primaryTealSurface
+                  .withAlpha(45)
+              : Colors.transparent,
+        ),
+        child: Row(
+          children: [
+            AnimatedContainer(
+              duration:
+                  const Duration(
+                milliseconds: 180,
+              ),
+              width: 14,
+              height: 14,
+              decoration:
+                  BoxDecoration(
+                color: dotColor,
+                shape: BoxShape.circle,
+                boxShadow: isFocused
+                    ? const [
+                        BoxShadow(
+                          color:
+                              AppColors.tealGlow,
+                          blurRadius: 8,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
+              ),
+            ),
+
+            const SizedBox(
+              width: 14,
+            ),
+
+            Expanded(
+              child: Column(
+                crossAxisAlignment:
+                    CrossAxisAlignment
+                        .start,
+                children: [
+                  Text(
+                    label,
+                    style:
+                        AppTextStyles.caption
+                            .copyWith(
+                      color: isFocused
+                          ? labelColor
+                          : AppColors
+                              .mediumGray,
+                      fontSize: 10,
+                      fontWeight:
+                          FontWeight.w600,
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
+
+                  const SizedBox(
+                    height: 2,
+                  ),
+
+                  TextField(
+                    controller:
+                        controller,
+                    focusNode:
+                        focusNode,
+                    textInputAction:
+                        textInputAction,
+                    onSubmitted: (_) {
+                      onSubmitted?.call();
+                    },
+                    style:
+                        AppTextStyles.label
+                            .copyWith(
+                      fontSize: 15,
+                      fontWeight: isSource
+                          ? FontWeight.w600
+                          : FontWeight.w700,
+                      color: isSource
+                          ? AppColors
+                              .deepSlate
+                          : AppColors
+                              .midnightBlue,
                     ),
-                    decoration: BoxDecoration(
-                      color: AppColors.primaryTealSurface,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      '150m walk',
-                      style: AppTextStyles.caption.copyWith(
-                        color: AppColors.primaryTealDark,
-                        fontWeight: FontWeight.w700,
+                    decoration:
+                        InputDecoration(
+                      hintText:
+                          hint,
+                      hintStyle:
+                          AppTextStyles.label
+                              .copyWith(
+                        fontSize: 14,
+                        color: AppColors
+                            .mediumGray,
+                        fontWeight:
+                            FontWeight.w400,
+                      ),
+                      border:
+                          InputBorder.none,
+                      enabledBorder:
+                          InputBorder.none,
+                      focusedBorder:
+                          InputBorder.none,
+                      isDense:
+                          true,
+                      contentPadding:
+                          const EdgeInsets
+                              .symmetric(
+                        vertical: 5,
                       ),
                     ),
                   ),
                 ],
               ),
+            ),
+
+            if (_isLoading &&
+                _activeField ==
+                    field)
+              const Padding(
+                padding:
+                    EdgeInsets.all(8),
+                child:
+                    SizedBox(
+                  width: 20,
+                  height: 20,
+                  child:
+                      CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                  ),
+                ),
+              )
+            else if (hasText)
+              IconButton(
+                icon:
+                    const Icon(
+                  Icons.close_rounded,
+                  size: 19,
+                ),
+                color:
+                    AppColors.mediumGray,
+                splashRadius:
+                    20,
+                onPressed:
+                    onClear,
+              )
+            else
+              IconButton(
+                icon:
+                    Icon(
+                  mapIcon,
+                  size: 21,
+                  color: isSource
+                      ? AppColors
+                          .primaryTealDark
+                      : AppColors
+                          .midnightBlue,
+                ),
+                splashRadius:
+                    20,
+                tooltip:
+                    'Select from map',
+                onPressed:
+                    onSelectFromMap,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+
+    final isSourceFocused =
+        _sourceFocusNode.hasFocus;
+
+    final isDestinationFocused =
+        _destinationFocusNode.hasFocus;
+
+    return Column(
+      crossAxisAlignment:
+          CrossAxisAlignment.start,
+      children: [
+        AnimatedContainer(
+          duration:
+              const Duration(
+            milliseconds: 180,
+          ),
+          padding:
+              const EdgeInsets.all(14),
+          decoration:
+              BoxDecoration(
+            color:
+                AppColors.white,
+            borderRadius:
+                BorderRadius.circular(18),
+            border:
+                Border.all(
+              color:
+                  isSourceFocused ||
+                          isDestinationFocused
+                      ? AppColors
+                          .primaryTeal
+                      : AppColors
+                          .borderGray,
+              width:
+                  isSourceFocused ||
+                          isDestinationFocused
+                      ? 1.8
+                      : 1.3,
+            ),
+            boxShadow:
+                const [
+              BoxShadow(
+                color:
+                    AppColors.shadowLight,
+                blurRadius:
+                    18,
+                offset:
+                    Offset(0, 5),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              _buildLocationInput(
+                field:
+                    ActiveSearchField.source,
+                controller:
+                    _sourceController,
+                focusNode:
+                    _sourceFocusNode,
+                layerLink:
+                    _sourceLayerLink,
+                label:
+                    'Starting Location',
+                hint:
+                    'Enter pickup location',
+                dotColor:
+                    AppColors.primaryTeal,
+                labelColor:
+                    AppColors.primaryTealDark,
+                mapIcon:
+                    Icons.map_outlined,
+                onSelectFromMap:
+                    _selectSourceFromMap,
+                onClear:
+                    _clearSource,
+                textInputAction:
+                    TextInputAction.next,
+                onSubmitted: () {
+                  _destinationFocusNode
+                      .requestFocus();
+                },
+              ),
 
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
-                    const SizedBox(width: 5),
+                    const SizedBox(
+                      width: 6,
+                    ),
+
                     Container(
                       width: 2,
-                      height: 18,
-                      color: AppColors.borderGray,
+                      height: 22,
+                      decoration:
+                          BoxDecoration(
+                        color: AppColors
+                            .borderGray,
+                        borderRadius:
+                            BorderRadius.circular(
+                          2,
+                        ),
+                      ),
                     ),
-                    const SizedBox(width: 19),
-                    const Expanded(child: Divider(height: 1)),
+
+                    const SizedBox(
+                      width: 20,
+                    ),
+
+                    Expanded(
+                      child:
+                          Divider(
+                        height:
+                            1,
+                        color:
+                            AppColors
+                                .borderGray,
+                      ),
+                    ),
                   ],
                 ),
               ),
 
-              // Destination Input
-              Row(
-                children: [
-                  Container(
-                    width: 12,
-                    height: 12,
-                    decoration: const BoxDecoration(
-                      color: AppColors.midnightBlue,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Where are you heading?',
-                          style: AppTextStyles.caption.copyWith(
-                            color: AppColors.mediumGray,
-                            fontSize: 10,
-                          ),
-                        ),
-                        Text(
-                          'DLF Cyber City, Gurgaon',
-                          style: AppTextStyles.label.copyWith(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.midnightBlue,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Icon(
-                    Icons.search_rounded,
-                    color: AppColors.primaryTealDark,
-                    size: 22,
-                  ),
-                ],
+              _buildLocationInput(
+                field:
+                    ActiveSearchField
+                        .destination,
+                controller:
+                    _destinationController,
+                focusNode:
+                    _destinationFocusNode,
+                layerLink:
+                    _destinationLayerLink,
+                label:
+                    'Where are you heading?',
+                hint:
+                    'Enter destination',
+                dotColor:
+                    AppColors.midnightBlue,
+                labelColor:
+                    AppColors.midnightBlue,
+                mapIcon:
+                    Icons.map_outlined,
+                onSelectFromMap:
+                    _selectDestinationFromMap,
+                onClear:
+                    _clearDestination,
+                textInputAction:
+                    TextInputAction.search,
+                onSubmitted:
+                    _searchRoute,
               ),
             ],
           ),
         ),
 
-        const SizedBox(height: 12),
+        const SizedBox(
+          height: 14,
+        ),
 
-        // Quick Filter Chips
         SizedBox(
-          height: 36,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            itemCount: _filters.length,
-            separatorBuilder: (_, a) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final filter = _filters[index];
-              final isSelected = filter == _selectedFilter;
-              return GestureDetector(
-                onTap: () {
-                  HapticFeedback.selectionClick();
-                  setState(() => _selectedFilter = filter);
-                  widget.onFilterChanged?.call(filter);
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 8,
+          width: double.infinity,
+          height: 50,
+          child: AnimatedOpacity(
+            duration: const Duration(
+              milliseconds: 180,
+            ),
+            opacity: _canSearchRoute ? 1 : 0.55,
+            child: ElevatedButton(
+              onPressed: (_canSearchRoute && !_localSearching && !widget.isSearchingRoute)
+                  ? _searchRoute
+                  : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.midnightBlue,
+                foregroundColor: AppColors.white,
+                disabledBackgroundColor: AppColors.borderGray,
+                disabledForegroundColor: AppColors.mediumGray,
+                elevation: _canSearchRoute ? 3 : 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(
+                    14,
                   ),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? AppColors.midnightBlue
-                        : AppColors.white,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(
-                      color: isSelected
-                          ? AppColors.midnightBlue
-                          : AppColors.borderGray,
-                      width: 1.5,
+                ),
+              ),
+              child: (_localSearching || widget.isSearchingRoute)
+                  ? const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.2,
+                            color: AppColors.white,
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Text(
+                          'Finding Route...',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    )
+                  : const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.alt_route_rounded,
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Search Route',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+        ),
+
+        if (widget.routeDistance != null &&
+            widget.routeDistance!.isNotEmpty) ...[
+          const SizedBox(
+            height: 12,
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 10,
+            ),
+            decoration: BoxDecoration(
+              color: AppColors.primaryTealSurface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppColors.primaryTeal.withOpacity(0.3),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.directions_car_rounded,
+                  color: AppColors.primaryTealDark,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Trip Distance: ${widget.routeDistance} • ${widget.routeDuration}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primaryTealDark,
+                      fontSize: 13.5,
                     ),
                   ),
-                  child: Center(
-                    child: Text(
+                ),
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: AppColors.primaryTealDark,
+                  size: 16,
+                ),
+              ],
+            ),
+          ),
+        ],
+
+        const SizedBox(
+          height: 12,
+        ),
+
+        SizedBox(
+          height:
+              36,
+          child:
+              ListView.separated(
+            scrollDirection:
+                Axis.horizontal,
+            physics:
+                const BouncingScrollPhysics(),
+            itemCount:
+                _filters.length,
+            separatorBuilder:
+                (_, __) =>
+                    const SizedBox(
+              width:
+                  8,
+            ),
+            itemBuilder:
+                (context, index) {
+              final filter =
+                  _filters[index];
+
+              final isSelected =
+                  filter ==
+                      _selectedFilter;
+
+              return GestureDetector(
+                onTap: () {
+                  HapticFeedback
+                      .selectionClick();
+
+                  setState(() {
+                    _selectedFilter =
+                        filter;
+                  });
+
+                  widget
+                      .onFilterChanged
+                      ?.call(
+                    filter,
+                  );
+                },
+                child:
+                    AnimatedContainer(
+                  duration:
+                      const Duration(
+                    milliseconds:
+                        200,
+                  ),
+                  padding:
+                      const EdgeInsets
+                          .symmetric(
+                    horizontal:
+                        14,
+                    vertical:
+                        8,
+                  ),
+                  decoration:
+                      BoxDecoration(
+                    color:
+                        isSelected
+                            ? AppColors
+                                .midnightBlue
+                            : AppColors
+                                .white,
+                    borderRadius:
+                        BorderRadius
+                            .circular(
+                      18,
+                    ),
+                    border:
+                        Border.all(
+                      color:
+                          isSelected
+                              ? AppColors
+                                  .midnightBlue
+                              : AppColors
+                                  .borderGray,
+                      width:
+                          1.5,
+                    ),
+                  ),
+                  child:
+                      Center(
+                    child:
+                        Text(
                       filter,
-                      style: AppTextStyles.caption.copyWith(
-                        color: isSelected ? AppColors.white : AppColors.deepSlate,
+                      style:
+                          AppTextStyles
+                              .caption
+                              .copyWith(
+                        color:
+                            isSelected
+                                ? AppColors
+                                    .white
+                                : AppColors
+                                    .deepSlate,
                         fontWeight:
-                            isSelected ? FontWeight.w700 : FontWeight.w500,
-                        fontSize: 12,
+                            isSelected
+                                ? FontWeight
+                                    .w700
+                                : FontWeight
+                                    .w500,
+                        fontSize:
+                            12,
                       ),
                     ),
                   ),
