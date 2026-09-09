@@ -1,12 +1,13 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../../../core/services/google_places_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 /// Identifies which location field is currently active.
 enum ActiveSearchField {
@@ -28,13 +29,13 @@ enum ActiveSearchField {
 class SearchBarWidget extends StatefulWidget {
   final ValueChanged<String>? onFilterChanged;
 
-  /// Initial source text passed from parent (e.g. from Map or previous search)
+  /// Initial source text passed from parent.
   final String? initialSource;
 
-  /// Initial destination text passed from parent (e.g. from Map or previous search)
+  /// Initial destination text passed from parent.
   final String? initialDestination;
 
-  /// Whether route coordinates/directions are currently being searched
+  /// Whether route coordinates/directions are currently being searched.
   final bool isSearchingRoute;
 
   /// Called when the user selects a source suggestion.
@@ -43,9 +44,10 @@ class SearchBarWidget extends StatefulWidget {
   /// Called when the user selects a destination suggestion.
   final ValueChanged<PlaceSuggestion>? onDestinationSelected;
 
-  /// Called when the source location is selected, providing its LatLng.
+  /// Called when the source location is selected.
   final ValueChanged<LatLng>? onSourceLocationSelected;
-  /// Called when the destination location is selected, providing its LatLng.
+
+  /// Called when the destination location is selected.
   final ValueChanged<LatLng>? onDestinationLocationSelected;
 
   /// Called when both source and destination are selected
@@ -63,7 +65,7 @@ class SearchBarWidget extends StatefulWidget {
   /// Called when user wants to select destination directly from map.
   final VoidCallback? onSelectDestinationFromMap;
 
-  /// Route distance and duration to display above filters when route is calculated
+  /// Route distance and duration.
   final String? routeDistance;
   final String? routeDuration;
 
@@ -94,9 +96,10 @@ class _SearchBarWidgetState
     with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
-  // ─────────────────────────────────────────────
+
+  // =============================================================
   // CONTROLLERS
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   final TextEditingController _sourceController =
       TextEditingController();
@@ -104,9 +107,9 @@ class _SearchBarWidgetState
   final TextEditingController _destinationController =
       TextEditingController();
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // FOCUS
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   final FocusNode _sourceFocusNode =
       FocusNode();
@@ -114,9 +117,9 @@ class _SearchBarWidgetState
   final FocusNode _destinationFocusNode =
       FocusNode();
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // OVERLAY ANCHORS
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   final LayerLink _sourceLayerLink =
       LayerLink();
@@ -126,9 +129,9 @@ class _SearchBarWidgetState
 
   OverlayEntry? _suggestionOverlay;
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // TIMERS
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   Timer? _sourceDebounce;
 
@@ -136,38 +139,37 @@ class _SearchBarWidgetState
 
   Timer? _hideOverlayTimer;
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // AUTOCOMPLETE STATE
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   List<PlaceSuggestion> _suggestions = [];
 
-  List<PlaceSuggestion> get suggestions => _suggestions;
+  List<PlaceSuggestion> get suggestions =>
+      _suggestions;
 
   bool _isLoading = false;
 
   ActiveSearchField? _activeField;
 
-  /// Prevents old API responses from replacing
-  /// newer autocomplete results.
+  /// Prevents old API responses from replacing newer results.
   int _searchRequestId = 0;
 
-  /// Prevent controller listeners from clearing
-  /// selected places while we update the fields
-  /// programmatically.
+  /// Prevents controller listeners from clearing selected places
+  /// while fields are updated programmatically.
   bool _isApplyingSelection = false;
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // SELECTED PLACES
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   PlaceSuggestion? _selectedSource;
 
   PlaceSuggestion? _selectedDestination;
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // FILTERS
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   String _selectedFilter = 'All';
 
@@ -181,32 +183,53 @@ class _SearchBarWidgetState
 
   bool _localSearching = false;
 
-  // ─────────────────────────────────────────────
+  // =============================================================
+  // PLATFORM
+  // =============================================================
+
+  bool get _isAndroid =>
+      defaultTargetPlatform ==
+      TargetPlatform.android;
+
+  // =============================================================
   // GETTERS
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   bool get _canSearchRoute {
-    final hasSource = _selectedSource != null ||
-        _sourceController.text.trim().isNotEmpty;
-    final hasDestination = _selectedDestination != null ||
-        _destinationController.text.trim().isNotEmpty;
-    return hasSource && hasDestination;
+    final hasSource =
+        _selectedSource != null ||
+            _sourceController.text
+                .trim()
+                .isNotEmpty;
+
+    final hasDestination =
+        _selectedDestination != null ||
+            _destinationController.text
+                .trim()
+                .isNotEmpty;
+
+    return hasSource &&
+        hasDestination;
   }
 
-  // ─────────────────────────────────────────────
-  // INITIALIZATION & LIFECYCLE
-  // ─────────────────────────────────────────────
+  // =============================================================
+  // INITIALIZATION
+  // =============================================================
 
   @override
   void initState() {
     super.initState();
 
-    if (widget.initialSource != null && widget.initialSource!.isNotEmpty) {
-      _sourceController.text = widget.initialSource!;
+    if (widget.initialSource != null &&
+        widget.initialSource!.isNotEmpty) {
+      _sourceController.text =
+          widget.initialSource!;
     }
+
     if (widget.initialDestination != null &&
         widget.initialDestination!.isNotEmpty) {
-      _destinationController.text = widget.initialDestination!;
+      _destinationController.text =
+          widget.initialDestination!;
     }
 
     _sourceFocusNode.addListener(
@@ -227,38 +250,52 @@ class _SearchBarWidgetState
   }
 
   @override
-  void didUpdateWidget(covariant SearchBarWidget oldWidget) {
+  void didUpdateWidget(
+    covariant SearchBarWidget oldWidget,
+  ) {
     super.didUpdateWidget(oldWidget);
 
     if (widget.initialSource != null &&
-        widget.initialSource != _sourceController.text &&
-        widget.initialSource != oldWidget.initialSource) {
+        widget.initialSource !=
+            _sourceController.text &&
+        widget.initialSource !=
+            oldWidget.initialSource) {
       _isApplyingSelection = true;
-      _sourceController.text = widget.initialSource!;
+
+      _sourceController.text =
+          widget.initialSource!;
+
       _isApplyingSelection = false;
     }
 
     if (widget.initialDestination != null &&
-        widget.initialDestination != _destinationController.text &&
-        widget.initialDestination != oldWidget.initialDestination) {
+        widget.initialDestination !=
+            _destinationController.text &&
+        widget.initialDestination !=
+            oldWidget.initialDestination) {
       _isApplyingSelection = true;
-      _destinationController.text = widget.initialDestination!;
+
+      _destinationController.text =
+          widget.initialDestination!;
+
       _isApplyingSelection = false;
     }
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // SOURCE FOCUS
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _handleSourceFocus() {
     if (_sourceFocusNode.hasFocus) {
       _hideOverlayTimer?.cancel();
 
-      setState(() {
-        _activeField =
-            ActiveSearchField.source;
-      });
+      if (mounted) {
+        setState(() {
+          _activeField =
+              ActiveSearchField.source;
+        });
+      }
 
       final text =
           _sourceController.text.trim();
@@ -276,18 +313,20 @@ class _SearchBarWidgetState
     _scheduleOverlayHide();
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // DESTINATION FOCUS
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _handleDestinationFocus() {
     if (_destinationFocusNode.hasFocus) {
       _hideOverlayTimer?.cancel();
 
-      setState(() {
-        _activeField =
-            ActiveSearchField.destination;
-      });
+      if (mounted) {
+        setState(() {
+          _activeField =
+              ActiveSearchField.destination;
+        });
+      }
 
       final text =
           _destinationController.text.trim();
@@ -305,17 +344,21 @@ class _SearchBarWidgetState
     _scheduleOverlayHide();
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // OVERLAY HIDE
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _scheduleOverlayHide() {
     _hideOverlayTimer?.cancel();
 
     _hideOverlayTimer = Timer(
-      const Duration(milliseconds: 250),
+      const Duration(
+        milliseconds: 250,
+      ),
       () {
-        if (!mounted) return;
+        if (!mounted) {
+          return;
+        }
 
         if (!_sourceFocusNode.hasFocus &&
             !_destinationFocusNode.hasFocus) {
@@ -325,9 +368,9 @@ class _SearchBarWidgetState
     );
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // SOURCE INPUT CHANGE
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _onSourceChanged() {
     if (_isApplyingSelection) {
@@ -351,7 +394,9 @@ class _SearchBarWidgetState
     }
 
     _sourceDebounce = Timer(
-      const Duration(milliseconds: 350),
+      const Duration(
+        milliseconds: 350,
+      ),
       () {
         if (_activeField ==
             ActiveSearchField.source) {
@@ -364,9 +409,9 @@ class _SearchBarWidgetState
     );
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // DESTINATION INPUT CHANGE
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _onDestinationChanged() {
     if (_isApplyingSelection) {
@@ -390,7 +435,9 @@ class _SearchBarWidgetState
     }
 
     _destinationDebounce = Timer(
-      const Duration(milliseconds: 350),
+      const Duration(
+        milliseconds: 350,
+      ),
       () {
         if (_activeField ==
             ActiveSearchField.destination) {
@@ -403,9 +450,9 @@ class _SearchBarWidgetState
     );
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // GOOGLE PLACES AUTOCOMPLETE
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   Future<void> _searchPlaces(
     String input,
@@ -430,11 +477,14 @@ class _SearchBarWidgetState
     try {
       final results =
           await GooglePlacesService.instance
-              .autocomplete(cleanInput);
+              .autocomplete(
+        cleanInput,
+      );
 
-      // Ignore stale API responses.
+      // Ignore stale responses.
       if (!mounted ||
-          requestId != _searchRequestId ||
+          requestId !=
+              _searchRequestId ||
           _activeField != field) {
         return;
       }
@@ -457,14 +507,16 @@ class _SearchBarWidgetState
       );
 
       if (!mounted ||
-          requestId != _searchRequestId) {
+          requestId !=
+              _searchRequestId) {
         return;
       }
 
       _clearSuggestions();
     } finally {
       if (mounted &&
-          requestId == _searchRequestId) {
+          requestId ==
+              _searchRequestId) {
         setState(() {
           _isLoading = false;
         });
@@ -472,25 +524,25 @@ class _SearchBarWidgetState
     }
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // SHOW SUGGESTION OVERLAY
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _showSuggestionOverlay(
     ActiveSearchField field,
     List<PlaceSuggestion> results,
   ) {
-    if (!mounted || results.isEmpty) {
+    if (!mounted ||
+        results.isEmpty) {
       return;
     }
 
     final LayerLink layerLink =
-        field == ActiveSearchField.source
+        field ==
+                ActiveSearchField.source
             ? _sourceLayerLink
             : _destinationLayerLink;
 
-    // Remove previous overlay only.
-    // Do not clear suggestions here.
     _removeSuggestionOverlayOnly();
 
     final RenderBox? renderBox =
@@ -502,13 +554,16 @@ class _SearchBarWidgetState
             MediaQuery.of(context)
                     .size
                     .width -
-                40;
+                (_isAndroid ? 32 : 40);
 
     final List<PlaceSuggestion>
         overlaySuggestions =
-        List<PlaceSuggestion>.from(results);
+        List<PlaceSuggestion>.from(
+      results,
+    );
 
-    _suggestionOverlay = OverlayEntry(
+    _suggestionOverlay =
+        OverlayEntry(
       builder: (overlayContext) {
         return CompositedTransformFollower(
           link: layerLink,
@@ -518,12 +573,18 @@ class _SearchBarWidgetState
           followerAnchor:
               Alignment.topLeft,
           offset:
-              const Offset(0, 8),
+              const Offset(
+            0,
+            8,
+          ),
           child: Material(
-            color: Colors.transparent,
+            color:
+                Colors.transparent,
             child: SizedBox(
-              width: width,
-              child: _buildSuggestionBox(
+              width:
+                  width,
+              child:
+                  _buildSuggestionBox(
                 field,
                 overlaySuggestions,
               ),
@@ -544,18 +605,18 @@ class _SearchBarWidgetState
     );
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // REMOVE OVERLAY ONLY
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _removeSuggestionOverlayOnly() {
     _suggestionOverlay?.remove();
     _suggestionOverlay = null;
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // REMOVE OVERLAY + CLEAR DATA
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _removeSuggestionOverlay() {
     _removeSuggestionOverlayOnly();
@@ -569,9 +630,9 @@ class _SearchBarWidgetState
     });
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // CLEAR SUGGESTIONS
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _clearSuggestions() {
     _removeSuggestionOverlayOnly();
@@ -585,9 +646,9 @@ class _SearchBarWidgetState
     });
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // SUGGESTION BOX
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   Widget _buildSuggestionBox(
     ActiveSearchField field,
@@ -595,24 +656,35 @@ class _SearchBarWidgetState
   ) {
     return Material(
       elevation: 14,
-      color: AppColors.white,
+      color:
+          AppColors.white,
       borderRadius:
-          BorderRadius.circular(18),
+          BorderRadius.circular(
+        18,
+      ),
       child: Container(
         constraints:
             const BoxConstraints(
           maxHeight: 310,
         ),
-        decoration: BoxDecoration(
-          color: AppColors.white,
+        decoration:
+            BoxDecoration(
+          color:
+              AppColors.white,
           borderRadius:
-              BorderRadius.circular(18),
-          border: Border.all(
-            color: AppColors.borderGray,
+              BorderRadius.circular(
+            18,
+          ),
+          border:
+              Border.all(
+            color:
+                AppColors.borderGray,
           ),
         ),
-        child: ListView.separated(
-          shrinkWrap: true,
+        child:
+            ListView.separated(
+          shrinkWrap:
+              true,
           padding:
               const EdgeInsets.symmetric(
             vertical: 6,
@@ -622,12 +694,14 @@ class _SearchBarWidgetState
           itemCount:
               suggestions.length,
           separatorBuilder:
-              (_, __) => Padding(
+              (_, __) =>
+                  Padding(
             padding:
                 const EdgeInsets.only(
               left: 68,
             ),
-            child: Divider(
+            child:
+                Divider(
               height: 1,
               color:
                   AppColors.borderGray,
@@ -645,16 +719,17 @@ class _SearchBarWidgetState
     );
   }
 
-  // ─────────────────────────────────────────────
-  // FULLY TOUCHABLE SUGGESTION ITEM
-  // ─────────────────────────────────────────────
+  // =============================================================
+  // SUGGESTION ITEM
+  // =============================================================
 
   Widget _buildSuggestionItem(
     PlaceSuggestion suggestion,
     ActiveSearchField field,
   ) {
     final parts =
-        suggestion.description.split(',');
+        suggestion.description
+            .split(',');
 
     final primaryText =
         parts.isNotEmpty
@@ -674,64 +749,88 @@ class _SearchBarWidgetState
             ActiveSearchField.source;
 
     return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () {
+      color:
+          Colors.transparent,
+      child:
+          InkWell(
+        onTap:
+            () {
           _selectSuggestion(
             suggestion,
             field,
           );
         },
         borderRadius:
-            BorderRadius.circular(12),
-        child: SizedBox(
-          width: double.infinity,
-          child: Padding(
+            BorderRadius.circular(
+          12,
+        ),
+        child:
+            SizedBox(
+          width:
+              double.infinity,
+          child:
+              Padding(
             padding:
-                const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 15,
+                EdgeInsets.symmetric(
+              horizontal:
+                  _isAndroid ? 12 : 16,
+              vertical:
+                  _isAndroid ? 13 : 15,
             ),
-            child: Row(
+            child:
+                Row(
               children: [
                 Container(
-                  width: 42,
-                  height: 42,
+                  width:
+                      _isAndroid ? 40 : 42,
+                  height:
+                      _isAndroid ? 40 : 42,
                   decoration:
-                      BoxDecoration(
-                    color: AppColors
-                        .primaryTealSurface,
+                      const BoxDecoration(
+                    color:
+                        AppColors
+                            .primaryTealSurface,
                     shape:
                         BoxShape.circle,
                   ),
-                  child: Icon(
+                  child:
+                      Icon(
                     isSource
                         ? Icons
                             .trip_origin_rounded
                         : Icons
                             .location_on_outlined,
-                    color: isSource
-                        ? AppColors
-                            .primaryTealDark
-                        : AppColors
-                            .midnightBlue,
-                    size: 21,
+                    color:
+                        isSource
+                            ? AppColors
+                                .primaryTealDark
+                            : AppColors
+                                .midnightBlue,
+                    size:
+                        _isAndroid
+                            ? 20
+                            : 21,
                   ),
                 ),
 
-                const SizedBox(
-                  width: 14,
+                SizedBox(
+                  width:
+                      _isAndroid
+                          ? 12
+                          : 14,
                 ),
 
                 Expanded(
-                  child: Column(
+                  child:
+                      Column(
                     crossAxisAlignment:
                         CrossAxisAlignment
                             .start,
                     children: [
                       Text(
                         primaryText,
-                        maxLines: 1,
+                        maxLines:
+                            1,
                         overflow:
                             TextOverflow
                                 .ellipsis,
@@ -739,7 +838,10 @@ class _SearchBarWidgetState
                             AppTextStyles
                                 .label
                                 .copyWith(
-                          fontSize: 14,
+                          fontSize:
+                              _isAndroid
+                                  ? 13
+                                  : 14,
                           fontWeight:
                               FontWeight
                                   .w700,
@@ -749,12 +851,13 @@ class _SearchBarWidgetState
                       if (secondaryText
                           .isNotEmpty) ...[
                         const SizedBox(
-                          height: 4,
+                          height:
+                              4,
                         ),
-
                         Text(
                           secondaryText,
-                          maxLines: 2,
+                          maxLines:
+                              2,
                           overflow:
                               TextOverflow
                                   .ellipsis,
@@ -762,9 +865,13 @@ class _SearchBarWidgetState
                               AppTextStyles
                                   .caption
                                   .copyWith(
-                            fontSize: 11,
-                            color: AppColors
-                                .mediumGray,
+                            fontSize:
+                                _isAndroid
+                                    ? 10
+                                    : 11,
+                            color:
+                                AppColors
+                                    .mediumGray,
                           ),
                         ),
                       ],
@@ -773,14 +880,18 @@ class _SearchBarWidgetState
                 ),
 
                 const SizedBox(
-                  width: 8,
+                  width:
+                      8,
                 ),
 
                 const Icon(
-                  Icons.north_west_rounded,
-                  size: 18,
+                  Icons
+                      .north_west_rounded,
+                  size:
+                      18,
                   color:
-                      AppColors.mediumGray,
+                      AppColors
+                          .mediumGray,
                 ),
               ],
             ),
@@ -790,9 +901,9 @@ class _SearchBarWidgetState
     );
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // SELECT SUGGESTION
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _selectSuggestion(
     PlaceSuggestion suggestion,
@@ -807,9 +918,7 @@ class _SearchBarWidgetState
 
     _hideOverlayTimer?.cancel();
 
-    // IMPORTANT:
-    // Remove overlay immediately but do not
-    // depend on focus or _activeField anymore.
+    // Remove the overlay immediately.
     _removeSuggestionOverlayOnly();
 
     _isApplyingSelection = true;
@@ -830,17 +939,28 @@ class _SearchBarWidgetState
         suggestion,
       );
 
-      _sourceFocusNode.unfocus();
-
       _isApplyingSelection = false;
 
-      // Automatically move user
-      // to destination input.
-      Future.delayed(
-        const Duration(
-          milliseconds: 250,
-        ),
-        () {
+      // ==========================================================
+      // IMPORTANT ANDROID KEYBOARD FIX
+      // ==========================================================
+      //
+      // Do NOT:
+      //
+      //   unfocus source
+      //   wait 250ms
+      //   request destination focus
+      //
+      // That sequence causes the keyboard to disappear and
+      // reopen, which makes the white search panel jump.
+      //
+      // Instead, transfer focus directly to destination.
+      // The keyboard therefore stays open.
+      // ==========================================================
+
+      WidgetsBinding.instance
+          .addPostFrameCallback(
+        (_) {
           if (!mounted) {
             return;
           }
@@ -869,15 +989,17 @@ class _SearchBarWidgetState
         suggestion,
       );
 
+      // Destination selection is the end of the
+      // autocomplete flow, so keyboard can close.
       _destinationFocusNode.unfocus();
 
       _isApplyingSelection = false;
     }
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // CLEAR SOURCE
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _clearSource() {
     _sourceDebounce?.cancel();
@@ -900,9 +1022,9 @@ class _SearchBarWidgetState
     _sourceFocusNode.requestFocus();
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // CLEAR DESTINATION
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _clearDestination() {
     _destinationDebounce?.cancel();
@@ -926,44 +1048,72 @@ class _SearchBarWidgetState
         .requestFocus();
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // SELECT SOURCE FROM MAP
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _selectSourceFromMap() {
     HapticFeedback.selectionClick();
 
+    _hideOverlayTimer?.cancel();
+
     _removeSuggestionOverlay();
 
+    // Map selection intentionally closes the keyboard.
     _sourceFocusNode.unfocus();
     _destinationFocusNode.unfocus();
 
-    widget.onSelectSourceFromMap
-        ?.call();
+    // Give Flutter one frame to process the focus change before
+    // changing the parent map selection mode.
+    WidgetsBinding.instance
+        .addPostFrameCallback(
+      (_) {
+        if (!mounted) {
+          return;
+        }
+
+        widget.onSelectSourceFromMap
+            ?.call();
+      },
+    );
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // SELECT DESTINATION FROM MAP
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   void _selectDestinationFromMap() {
     HapticFeedback.selectionClick();
 
+    _hideOverlayTimer?.cancel();
+
     _removeSuggestionOverlay();
 
+    // Map selection intentionally closes the keyboard.
     _sourceFocusNode.unfocus();
     _destinationFocusNode.unfocus();
 
-    widget.onSelectDestinationFromMap
-        ?.call();
+    WidgetsBinding.instance
+        .addPostFrameCallback(
+      (_) {
+        if (!mounted) {
+          return;
+        }
+
+        widget.onSelectDestinationFromMap
+            ?.call();
+      },
+    );
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // SEARCH ROUTE
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   Future<void> _searchRoute() async {
-    if (!_canSearchRoute || _localSearching || widget.isSearchingRoute) {
+    if (!_canSearchRoute ||
+        _localSearching ||
+        widget.isSearchingRoute) {
       return;
     }
 
@@ -979,42 +1129,95 @@ class _SearchBarWidgetState
     });
 
     try {
+      // ==========================================================
+      // SOURCE
+      // ==========================================================
+
       LatLng? sourceLatLng;
+
       if (_selectedSource != null) {
-        sourceLatLng = await GooglePlacesService.instance
-            .getPlaceLocation(_selectedSource!.placeId);
-      } else if (_sourceController.text.trim().isNotEmpty) {
-        final suggestions = await GooglePlacesService.instance
-            .autocomplete(_sourceController.text.trim());
+        sourceLatLng =
+            await GooglePlacesService
+                .instance
+                .getPlaceLocation(
+          _selectedSource!.placeId,
+        );
+      } else if (_sourceController.text
+          .trim()
+          .isNotEmpty) {
+        final suggestions =
+            await GooglePlacesService
+                .instance
+                .autocomplete(
+          _sourceController.text.trim(),
+        );
+
         if (suggestions.isNotEmpty) {
-          sourceLatLng = await GooglePlacesService.instance
-              .getPlaceLocation(suggestions.first.placeId);
+          sourceLatLng =
+              await GooglePlacesService
+                  .instance
+                  .getPlaceLocation(
+            suggestions.first.placeId,
+          );
         }
       }
+
+      // ==========================================================
+      // DESTINATION
+      // ==========================================================
 
       LatLng? destinationLatLng;
+
       if (_selectedDestination != null) {
-        destinationLatLng = await GooglePlacesService.instance
-            .getPlaceLocation(_selectedDestination!.placeId);
-      } else if (_destinationController.text.trim().isNotEmpty) {
-        final suggestions = await GooglePlacesService.instance
-            .autocomplete(_destinationController.text.trim());
+        destinationLatLng =
+            await GooglePlacesService
+                .instance
+                .getPlaceLocation(
+          _selectedDestination!
+              .placeId,
+        );
+      } else if (_destinationController
+          .text
+          .trim()
+          .isNotEmpty) {
+        final suggestions =
+            await GooglePlacesService
+                .instance
+                .autocomplete(
+          _destinationController
+              .text
+              .trim(),
+        );
+
         if (suggestions.isNotEmpty) {
-          destinationLatLng = await GooglePlacesService.instance
-              .getPlaceLocation(suggestions.first.placeId);
+          destinationLatLng =
+              await GooglePlacesService
+                  .instance
+                  .getPlaceLocation(
+            suggestions.first.placeId,
+          );
         }
       }
 
-      if (sourceLatLng != null && destinationLatLng != null) {
+      // ==========================================================
+      // ROUTE CALLBACK
+      // ==========================================================
+
+      if (sourceLatLng != null &&
+          destinationLatLng != null) {
         widget.onRouteSearch?.call(
           sourceLatLng,
           destinationLatLng,
           _sourceController.text.trim(),
-          _destinationController.text.trim(),
+          _destinationController
+              .text
+              .trim(),
         );
       }
     } catch (e) {
-      debugPrint('Error fetching place locations: $e');
+      debugPrint(
+        'Error fetching place locations: $e',
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -1024,9 +1227,9 @@ class _SearchBarWidgetState
     }
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // DISPOSE
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   @override
   void dispose() {
@@ -1045,9 +1248,9 @@ class _SearchBarWidgetState
     super.dispose();
   }
 
-  // ─────────────────────────────────────────────
-  // BUILD LOCATION INPUT
-  // ─────────────────────────────────────────────
+  // =============================================================
+  // LOCATION INPUT
+  // =============================================================
 
   Widget _buildLocationInput({
     required ActiveSearchField field,
@@ -1075,55 +1278,84 @@ class _SearchBarWidgetState
             ActiveSearchField.source;
 
     return CompositedTransformTarget(
-      link: layerLink,
-      child: Container(
+      link:
+          layerLink,
+      child:
+          Container(
         padding:
-            const EdgeInsets.symmetric(
-          horizontal: 2,
-          vertical: 4,
+            EdgeInsets.symmetric(
+          horizontal:
+              2,
+          vertical:
+              _isAndroid ? 3 : 4,
         ),
         decoration:
             BoxDecoration(
           borderRadius:
-              BorderRadius.circular(12),
-          color: isFocused
-              ? AppColors
-                  .primaryTealSurface
-                  .withAlpha(45)
-              : Colors.transparent,
+              BorderRadius.circular(
+            12,
+          ),
+          color:
+              isFocused
+                  ? AppColors
+                      .primaryTealSurface
+                      .withAlpha(
+                    45,
+                  )
+                  : Colors.transparent,
         ),
-        child: Row(
+        child:
+            Row(
           children: [
+            // ======================================================
+            // LOCATION DOT
+            // ======================================================
+
             AnimatedContainer(
               duration:
                   const Duration(
-                milliseconds: 180,
+                milliseconds:
+                    180,
               ),
-              width: 14,
-              height: 14,
+              width:
+                  _isAndroid ? 13 : 14,
+              height:
+                  _isAndroid ? 13 : 14,
               decoration:
                   BoxDecoration(
-                color: dotColor,
-                shape: BoxShape.circle,
-                boxShadow: isFocused
-                    ? const [
-                        BoxShadow(
-                          color:
-                              AppColors.tealGlow,
-                          blurRadius: 8,
-                          spreadRadius: 1,
-                        ),
-                      ]
-                    : null,
+                color:
+                    dotColor,
+                shape:
+                    BoxShape.circle,
+                boxShadow:
+                    isFocused
+                        ? const [
+                            BoxShadow(
+                              color:
+                                  AppColors
+                                      .tealGlow,
+                              blurRadius:
+                                  8,
+                              spreadRadius:
+                                  1,
+                            ),
+                          ]
+                        : null,
               ),
             ),
 
-            const SizedBox(
-              width: 14,
+            SizedBox(
+              width:
+                  _isAndroid ? 11 : 14,
             ),
 
+            // ======================================================
+            // TEXT
+            // ======================================================
+
             Expanded(
-              child: Column(
+              child:
+                  Column(
                 crossAxisAlignment:
                     CrossAxisAlignment
                         .start,
@@ -1131,20 +1363,27 @@ class _SearchBarWidgetState
                   Text(
                     label,
                     style:
-                        AppTextStyles.caption
+                        AppTextStyles
+                            .caption
                             .copyWith(
-                      color: isFocused
-                          ? labelColor
-                          : AppColors
-                              .mediumGray,
-                      fontSize: 10,
+                      color:
+                          isFocused
+                              ? labelColor
+                              : AppColors
+                                  .mediumGray,
+                      fontSize:
+                          _isAndroid
+                              ? 9
+                              : 10,
                       fontWeight:
-                          FontWeight.w600,
+                          FontWeight
+                              .w600,
                     ),
                   ),
 
                   const SizedBox(
-                    height: 2,
+                    height:
+                        2,
                   ),
 
                   TextField(
@@ -1154,34 +1393,50 @@ class _SearchBarWidgetState
                         focusNode,
                     textInputAction:
                         textInputAction,
-                    onSubmitted: (_) {
-                      onSubmitted?.call();
+                    onSubmitted:
+                        (_) {
+                      onSubmitted
+                          ?.call();
                     },
                     style:
-                        AppTextStyles.label
+                        AppTextStyles
+                            .label
                             .copyWith(
-                      fontSize: 15,
-                      fontWeight: isSource
-                          ? FontWeight.w600
-                          : FontWeight.w700,
-                      color: isSource
-                          ? AppColors
-                              .deepSlate
-                          : AppColors
-                              .midnightBlue,
+                      fontSize:
+                          _isAndroid
+                              ? 14
+                              : 15,
+                      fontWeight:
+                          isSource
+                              ? FontWeight
+                                  .w600
+                              : FontWeight
+                                  .w700,
+                      color:
+                          isSource
+                              ? AppColors
+                                  .deepSlate
+                              : AppColors
+                                  .midnightBlue,
                     ),
                     decoration:
                         InputDecoration(
                       hintText:
                           hint,
                       hintStyle:
-                          AppTextStyles.label
+                          AppTextStyles
+                              .label
                               .copyWith(
-                        fontSize: 14,
-                        color: AppColors
-                            .mediumGray,
+                        fontSize:
+                            _isAndroid
+                                ? 13
+                                : 14,
+                        color:
+                            AppColors
+                                .mediumGray,
                         fontWeight:
-                            FontWeight.w400,
+                            FontWeight
+                                .w400,
                       ),
                       border:
                           InputBorder.none,
@@ -1192,9 +1447,11 @@ class _SearchBarWidgetState
                       isDense:
                           true,
                       contentPadding:
-                          const EdgeInsets
-                              .symmetric(
-                        vertical: 5,
+                          EdgeInsets.symmetric(
+                        vertical:
+                            _isAndroid
+                                ? 4
+                                : 5,
                       ),
                     ),
                   ),
@@ -1202,19 +1459,31 @@ class _SearchBarWidgetState
               ),
             ),
 
+            // ======================================================
+            // LOADING / CLEAR / MAP
+            // ======================================================
+
             if (_isLoading &&
                 _activeField ==
                     field)
-              const Padding(
+              Padding(
                 padding:
-                    EdgeInsets.all(8),
+                    const EdgeInsets.all(
+                  8,
+                ),
                 child:
                     SizedBox(
-                  width: 20,
-                  height: 20,
+                  width:
+                      20,
+                  height:
+                      20,
                   child:
                       CircularProgressIndicator(
-                    strokeWidth: 2.2,
+                    strokeWidth:
+                        2.2,
+                    color:
+                        AppColors
+                            .primaryTeal,
                   ),
                 ),
               )
@@ -1222,11 +1491,14 @@ class _SearchBarWidgetState
               IconButton(
                 icon:
                     const Icon(
-                  Icons.close_rounded,
-                  size: 19,
+                  Icons
+                      .close_rounded,
+                  size:
+                      19,
                 ),
                 color:
-                    AppColors.mediumGray,
+                    AppColors
+                        .mediumGray,
                 splashRadius:
                     20,
                 onPressed:
@@ -1237,12 +1509,16 @@ class _SearchBarWidgetState
                 icon:
                     Icon(
                   mapIcon,
-                  size: 21,
-                  color: isSource
-                      ? AppColors
-                          .primaryTealDark
-                      : AppColors
-                          .midnightBlue,
+                  size:
+                      _isAndroid
+                          ? 20
+                          : 21,
+                  color:
+                      isSource
+                          ? AppColors
+                              .primaryTealDark
+                          : AppColors
+                              .midnightBlue,
                 ),
                 splashRadius:
                     20,
@@ -1257,12 +1533,14 @@ class _SearchBarWidgetState
     );
   }
 
-  // ─────────────────────────────────────────────
+  // =============================================================
   // BUILD
-  // ─────────────────────────────────────────────
+  // =============================================================
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     super.build(context);
 
     final isSourceFocused =
@@ -1275,19 +1553,28 @@ class _SearchBarWidgetState
       crossAxisAlignment:
           CrossAxisAlignment.start,
       children: [
+        // ==========================================================
+        // SEARCH CONTAINER
+        // ==========================================================
+
         AnimatedContainer(
           duration:
               const Duration(
-            milliseconds: 180,
+            milliseconds:
+                180,
           ),
           padding:
-              const EdgeInsets.all(14),
+              EdgeInsets.all(
+            _isAndroid ? 12 : 14,
+          ),
           decoration:
               BoxDecoration(
             color:
                 AppColors.white,
             borderRadius:
-                BorderRadius.circular(18),
+                BorderRadius.circular(
+              18,
+            ),
             border:
                 Border.all(
               color:
@@ -1307,19 +1594,29 @@ class _SearchBarWidgetState
                 const [
               BoxShadow(
                 color:
-                    AppColors.shadowLight,
+                    AppColors
+                        .shadowLight,
                 blurRadius:
                     18,
                 offset:
-                    Offset(0, 5),
+                    Offset(
+                  0,
+                  5,
+                ),
               ),
             ],
           ),
-          child: Column(
+          child:
+              Column(
             children: [
+              // ====================================================
+              // SOURCE
+              // ====================================================
+
               _buildLocationInput(
                 field:
-                    ActiveSearchField.source,
+                    ActiveSearchField
+                        .source,
                 controller:
                     _sourceController,
                 focusNode:
@@ -1331,9 +1628,11 @@ class _SearchBarWidgetState
                 hint:
                     'Enter pickup location',
                 dotColor:
-                    AppColors.primaryTeal,
+                    AppColors
+                        .primaryTeal,
                 labelColor:
-                    AppColors.primaryTealDark,
+                    AppColors
+                        .primaryTealDark,
                 mapIcon:
                     Icons.map_outlined,
                 onSelectFromMap:
@@ -1342,39 +1641,53 @@ class _SearchBarWidgetState
                     _clearSource,
                 textInputAction:
                     TextInputAction.next,
-                onSubmitted: () {
+                onSubmitted:
+                    () {
                   _destinationFocusNode
                       .requestFocus();
                 },
               ),
 
+              // ====================================================
+              // CONNECTOR
+              // ====================================================
+
               Padding(
                 padding:
-                    const EdgeInsets.symmetric(
-                  vertical: 8,
+                    const EdgeInsets
+                        .symmetric(
+                  vertical:
+                      8,
                 ),
-                child: Row(
+                child:
+                    Row(
                   children: [
                     const SizedBox(
-                      width: 6,
+                      width:
+                          6,
                     ),
 
                     Container(
-                      width: 2,
-                      height: 22,
+                      width:
+                          2,
+                      height:
+                          22,
                       decoration:
                           BoxDecoration(
-                        color: AppColors
-                            .borderGray,
+                        color:
+                            AppColors
+                                .borderGray,
                         borderRadius:
-                            BorderRadius.circular(
+                            BorderRadius
+                                .circular(
                           2,
                         ),
                       ),
                     ),
 
                     const SizedBox(
-                      width: 20,
+                      width:
+                          20,
                     ),
 
                     Expanded(
@@ -1391,6 +1704,10 @@ class _SearchBarWidgetState
                 ),
               ),
 
+              // ====================================================
+              // DESTINATION
+              // ====================================================
+
               _buildLocationInput(
                 field:
                     ActiveSearchField
@@ -1406,9 +1723,11 @@ class _SearchBarWidgetState
                 hint:
                     'Enter destination',
                 dotColor:
-                    AppColors.midnightBlue,
+                    AppColors
+                        .midnightBlue,
                 labelColor:
-                    AppColors.midnightBlue,
+                    AppColors
+                        .midnightBlue,
                 mapIcon:
                     Icons.map_outlined,
                 onSelectFromMap:
@@ -1425,115 +1744,226 @@ class _SearchBarWidgetState
         ),
 
         const SizedBox(
-          height: 14,
+          height:
+              14,
         ),
 
+        // ==========================================================
+        // SEARCH ROUTE BUTTON
+        // ==========================================================
+
         SizedBox(
-          width: double.infinity,
-          height: 50,
-          child: AnimatedOpacity(
-            duration: const Duration(
-              milliseconds: 180,
+          width:
+              double.infinity,
+          height:
+              _isAndroid ? 48 : 50,
+          child:
+              AnimatedOpacity(
+            duration:
+                const Duration(
+              milliseconds:
+                  180,
             ),
-            opacity: _canSearchRoute ? 1 : 0.55,
-            child: ElevatedButton(
-              onPressed: (_canSearchRoute && !_localSearching && !widget.isSearchingRoute)
-                  ? _searchRoute
-                  : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.midnightBlue,
-                foregroundColor: AppColors.white,
-                disabledBackgroundColor: AppColors.borderGray,
-                disabledForegroundColor: AppColors.mediumGray,
-                elevation: _canSearchRoute ? 3 : 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(
+            opacity:
+                _canSearchRoute
+                    ? 1
+                    : 0.55,
+            child:
+                ElevatedButton(
+              onPressed:
+                  (_canSearchRoute &&
+                          !_localSearching &&
+                          !widget
+                              .isSearchingRoute)
+                      ? _searchRoute
+                      : null,
+              style:
+                  ElevatedButton
+                      .styleFrom(
+                backgroundColor:
+                    AppColors
+                        .midnightBlue,
+                foregroundColor:
+                    AppColors.white,
+                disabledBackgroundColor:
+                    AppColors
+                        .borderGray,
+                disabledForegroundColor:
+                    AppColors
+                        .mediumGray,
+                elevation:
+                    _canSearchRoute
+                        ? 3
+                        : 0,
+                shape:
+                    RoundedRectangleBorder(
+                  borderRadius:
+                      BorderRadius
+                          .circular(
                     14,
                   ),
                 ),
               ),
-              child: (_localSearching || widget.isSearchingRoute)
-                  ? const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.2,
-                            color: AppColors.white,
-                          ),
+              child:
+                  (_localSearching ||
+                          widget
+                              .isSearchingRoute)
+                      ? const Row(
+                          mainAxisAlignment:
+                              MainAxisAlignment
+                                  .center,
+                          children: [
+                            SizedBox(
+                              width:
+                                  18,
+                              height:
+                                  18,
+                              child:
+                                  CircularProgressIndicator(
+                                strokeWidth:
+                                    2.2,
+                                color:
+                                    AppColors
+                                        .white,
+                              ),
+                            ),
+                            SizedBox(
+                              width:
+                                  12,
+                            ),
+                            Text(
+                              'Finding Route...',
+                              style:
+                                  TextStyle(
+                                fontSize:
+                                    15,
+                                fontWeight:
+                                    FontWeight
+                                        .w600,
+                              ),
+                            ),
+                          ],
+                        )
+                      : const Row(
+                          mainAxisAlignment:
+                              MainAxisAlignment
+                                  .center,
+                          children: [
+                            Icon(
+                              Icons
+                                  .alt_route_rounded,
+                              size:
+                                  20,
+                            ),
+                            SizedBox(
+                              width:
+                                  8,
+                            ),
+                            Text(
+                              'Search Route',
+                              style:
+                                  TextStyle(
+                                fontSize:
+                                    15,
+                                fontWeight:
+                                    FontWeight
+                                        .w600,
+                              ),
+                            ),
+                          ],
                         ),
-                        SizedBox(width: 12),
-                        Text(
-                          'Finding Route...',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    )
-                  : const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.alt_route_rounded,
-                          size: 20,
-                        ),
-                        SizedBox(width: 8),
-                        Text(
-                          'Search Route',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
             ),
           ),
         ),
 
-        if (widget.routeDistance != null &&
-            widget.routeDistance!.isNotEmpty) ...[
+        // ==========================================================
+        // ROUTE INFORMATION
+        // ==========================================================
+
+        if (widget.routeDistance !=
+                null &&
+            widget.routeDistance!
+                .isNotEmpty) ...[
           const SizedBox(
-            height: 12,
+            height:
+                12,
           ),
+
           Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 14,
-              vertical: 10,
+            padding:
+                const EdgeInsets
+                    .symmetric(
+              horizontal:
+                  14,
+              vertical:
+                  10,
             ),
-            decoration: BoxDecoration(
-              color: AppColors.primaryTealSurface,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: AppColors.primaryTeal.withOpacity(0.3),
+            decoration:
+                BoxDecoration(
+              color:
+                  AppColors
+                      .primaryTealSurface,
+              borderRadius:
+                  BorderRadius.circular(
+                12,
+              ),
+              border:
+                  Border.all(
+                color:
+                    AppColors
+                        .primaryTeal
+                        .withValues(
+                  alpha:
+                      0.3,
+                ),
               ),
             ),
-            child: Row(
+            child:
+                Row(
               children: [
                 const Icon(
-                  Icons.directions_car_rounded,
-                  color: AppColors.primaryTealDark,
-                  size: 20,
+                  Icons
+                      .directions_car_rounded,
+                  color:
+                      AppColors
+                          .primaryTealDark,
+                  size:
+                      20,
                 ),
-                const SizedBox(width: 8),
+
+                const SizedBox(
+                  width:
+                      8,
+                ),
+
                 Expanded(
-                  child: Text(
-                    'Trip Distance: ${widget.routeDistance} • ${widget.routeDuration}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.primaryTealDark,
-                      fontSize: 13.5,
+                  child:
+                      Text(
+                    'Trip Distance: '
+                    '${widget.routeDistance} • '
+                    '${widget.routeDuration}',
+                    style:
+                        const TextStyle(
+                      fontWeight:
+                          FontWeight
+                              .w700,
+                      color:
+                          AppColors
+                              .primaryTealDark,
+                      fontSize:
+                          13.5,
                     ),
                   ),
                 ),
+
                 const Icon(
-                  Icons.check_circle_rounded,
-                  color: AppColors.primaryTealDark,
-                  size: 16,
+                  Icons
+                      .check_circle_rounded,
+                  color:
+                      AppColors
+                          .primaryTealDark,
+                  size:
+                      16,
                 ),
               ],
             ),
@@ -1541,8 +1971,13 @@ class _SearchBarWidgetState
         ],
 
         const SizedBox(
-          height: 12,
+          height:
+              12,
         ),
+
+        // ==========================================================
+        // FILTERS
+        // ==========================================================
 
         SizedBox(
           height:
@@ -1571,7 +2006,11 @@ class _SearchBarWidgetState
                       _selectedFilter;
 
               return GestureDetector(
-                onTap: () {
+                behavior:
+                    HitTestBehavior
+                        .opaque,
+                onTap:
+                    () {
                   HapticFeedback
                       .selectionClick();
 
@@ -1594,10 +2033,11 @@ class _SearchBarWidgetState
                         200,
                   ),
                   padding:
-                      const EdgeInsets
-                          .symmetric(
+                      EdgeInsets.symmetric(
                     horizontal:
-                        14,
+                        _isAndroid
+                            ? 12
+                            : 14,
                     vertical:
                         8,
                   ),
@@ -1648,7 +2088,9 @@ class _SearchBarWidgetState
                                 : FontWeight
                                     .w500,
                         fontSize:
-                            12,
+                            _isAndroid
+                                ? 11
+                                : 12,
                       ),
                     ),
                   ),

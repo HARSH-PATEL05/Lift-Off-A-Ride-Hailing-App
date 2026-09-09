@@ -8,6 +8,7 @@ class ApiEndpoints {
   // For physical device, use your PC's local IP (e.g., 192.168.x.x:8000).
   // For production, replace with deployed URL.
   static const String baseUrl = 'http://127.0.0.1:8000';
+  // static const String baseUrl = 'http://10.34.101.231:8000';
 
   // ─── Auth ───
   /// POST: Send Supabase JWT → Backend creates/returns user profile.

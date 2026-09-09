@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -11,13 +12,19 @@ import '../../../core/theme/app_text_styles.dart';
 
 /// Floating Top Bar for LiftOff.
 ///
-/// Features:
-/// - Displays the user's real live location address.
-/// - Opens the map/current location when location pill is tapped.
-/// - Opens the user profile when avatar is tapped.
-/// - Switches between Traveller and Host modes.
-/// - Shows cached Google profile image when available.
-/// - Falls back to the user's first initial when the image fails.
+/// Traveller Mode:
+/// - Live location card
+/// - Profile avatar
+/// - Traveller / Host mode switcher
+///
+/// Host Mode:
+/// - Live location card hidden
+/// - Profile avatar hidden
+/// - Mode switcher moved to the top
+///
+/// Platform behavior:
+/// - Web / Windows keep the original Traveller sizing.
+/// - Android uses a more compact layout.
 class FloatingTopBar extends StatelessWidget {
   final bool isRiderMode;
   final ValueChanged<bool> onModeChanged;
@@ -42,9 +49,11 @@ class FloatingTopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final profile = AuthService.instance.currentProfile;
+    final profile =
+        AuthService.instance.currentProfile;
 
-    final avatarUrl = profile?.avatarUrl?.trim();
+    final avatarUrl =
+        profile?.avatarUrl?.trim();
 
     final name =
         profile?.fullName ??
@@ -59,59 +68,131 @@ class FloatingTopBar extends StatelessWidget {
     final isVerified =
         profile?.aadhaarVerified ?? false;
 
+    // ============================================================
+    // PLATFORM
+    // ============================================================
+
+    final isAndroid =
+        defaultTargetPlatform ==
+            TargetPlatform.android;
+
+    // ============================================================
+    // HOST MODE
+    // ============================================================
+    //
+    // In Host Mode we ONLY show the mode switcher.
+    //
+    // Live Location + Avatar are completely removed from
+    // the widget tree, so they do not occupy any space.
+    // ============================================================
+
+    if (isRiderMode) {
+      return SafeArea(
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal:
+                isAndroid ? 12 : 16,
+            vertical:
+                isAndroid ? 4 : 8,
+          ),
+          child: Align(
+            alignment:
+                Alignment.topCenter,
+            child:
+                _buildModeSwitcher(
+              isAndroid:
+                  isAndroid,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // ============================================================
+    // TRAVELLER MODE
+    // ============================================================
+    //
+    // This is the existing normal layout.
+    //
+    // Live Location + Avatar
+    //          ↓
+    //      Mode Switcher
+    //
+    // Nothing is removed or changed here.
+    // ============================================================
+
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 8,
+        padding: EdgeInsets.symmetric(
+          horizontal:
+              isAndroid ? 12 : 16,
+          vertical:
+              isAndroid ? 4 : 8,
         ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize:
+              MainAxisSize.min,
           children: [
-            // =========================================================
+            // =======================================================
             // TOP ROW
-            // =========================================================
+            // =======================================================
 
             Row(
               children: [
-                // =====================================================
+                // ===================================================
                 // LIVE LOCATION CARD
-                // =====================================================
+                // ===================================================
 
                 Expanded(
-                  child: ClipRRect(
+                  child:
+                      ClipRRect(
                     borderRadius:
-                        BorderRadius.circular(16),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(
+                        BorderRadius.circular(
+                      16,
+                    ),
+                    child:
+                        BackdropFilter(
+                      filter:
+                          ImageFilter.blur(
                         sigmaX: 12,
                         sigmaY: 12,
                       ),
-                      child: Material(
+                      child:
+                          Material(
                         color:
                             Colors.transparent,
-                        child: InkWell(
+                        child:
+                            InkWell(
                           onTap:
                               onLiveLocationTap,
                           borderRadius:
                               BorderRadius.circular(
                             16,
                           ),
-                          child: Container(
+                          child:
+                              Container(
                             padding:
-                                const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 10,
+                                EdgeInsets.symmetric(
+                              horizontal:
+                                  isAndroid
+                                      ? 10
+                                      : 14,
+                              vertical:
+                                  isAndroid
+                                      ? 8
+                                      : 10,
                             ),
                             decoration:
                                 BoxDecoration(
                               color:
-                                  AppColors.white
+                                  AppColors
+                                      .white
                                       .withAlpha(
                                 240,
                               ),
                               borderRadius:
-                                  BorderRadius.circular(
+                                  BorderRadius
+                                      .circular(
                                 16,
                               ),
                               border:
@@ -119,9 +200,11 @@ class FloatingTopBar extends StatelessWidget {
                                 color:
                                     AppColors
                                         .borderGray,
-                                width: 1,
+                                width:
+                                    1,
                               ),
-                              boxShadow: const [
+                              boxShadow:
+                                  const [
                                 BoxShadow(
                                   color:
                                       AppColors
@@ -129,21 +212,34 @@ class FloatingTopBar extends StatelessWidget {
                                   blurRadius:
                                       16,
                                   offset:
-                                      Offset(0, 4),
+                                      Offset(
+                                    0,
+                                    4,
+                                  ),
                                 ),
                               ],
                             ),
-                            child: Row(
+                            child:
+                                Row(
                               children: [
-                                // Location Icon
+                                // =================================
+                                // LOCATION ICON
+                                // =================================
 
                                 Container(
-                                  width: 32,
-                                  height: 32,
+                                  width:
+                                      isAndroid
+                                          ? 30
+                                          : 32,
+                                  height:
+                                      isAndroid
+                                          ? 30
+                                          : 32,
                                   decoration:
                                       BoxDecoration(
-                                    color: AppColors
-                                        .primaryTealSurface,
+                                    color:
+                                        AppColors
+                                            .primaryTealSurface,
                                     borderRadius:
                                         BorderRadius
                                             .circular(
@@ -151,24 +247,33 @@ class FloatingTopBar extends StatelessWidget {
                                     ),
                                   ),
                                   child:
-                                      const Icon(
+                                      Icon(
                                     Icons
                                         .my_location_rounded,
                                     color:
                                         AppColors
                                             .primaryTealDark,
-                                    size: 18,
+                                    size:
+                                        isAndroid
+                                            ? 17
+                                            : 18,
                                   ),
                                 ),
 
-                                const SizedBox(
-                                  width: 10,
+                                SizedBox(
+                                  width:
+                                      isAndroid
+                                          ? 8
+                                          : 10,
                                 ),
 
-                                // Location Text
+                                // =================================
+                                // LOCATION TEXT
+                                // =================================
 
                                 Expanded(
-                                  child: Column(
+                                  child:
+                                      Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment
                                             .start,
@@ -178,29 +283,45 @@ class FloatingTopBar extends StatelessWidget {
                                     children: [
                                       Row(
                                         children: [
-                                          Text(
-                                            'Your Live Location',
-                                            style: AppTextStyles
-                                                .caption
-                                                .copyWith(
-                                              color:
-                                                  AppColors
-                                                      .primaryTealDark,
-                                              fontWeight:
-                                                  FontWeight
-                                                      .w700,
-                                              fontSize:
-                                                  10,
+                                          Flexible(
+                                            child:
+                                                Text(
+                                              'Your Live Location',
+                                              maxLines:
+                                                  1,
+                                              overflow:
+                                                  TextOverflow
+                                                      .ellipsis,
+                                              style:
+                                                  AppTextStyles
+                                                      .caption
+                                                      .copyWith(
+                                                color:
+                                                    AppColors
+                                                        .primaryTealDark,
+                                                fontWeight:
+                                                    FontWeight
+                                                        .w700,
+                                                fontSize:
+                                                    isAndroid
+                                                        ? 9
+                                                        : 10,
+                                              ),
                                             ),
                                           ),
 
-                                          const SizedBox(
-                                            width: 5,
+                                          SizedBox(
+                                            width:
+                                                isAndroid
+                                                    ? 4
+                                                    : 5,
                                           ),
 
                                           Container(
-                                            width: 6,
-                                            height: 6,
+                                            width:
+                                                6,
+                                            height:
+                                                6,
                                             decoration:
                                                 const BoxDecoration(
                                               color:
@@ -215,16 +336,20 @@ class FloatingTopBar extends StatelessWidget {
                                       ),
 
                                       const SizedBox(
-                                        height: 2,
+                                        height:
+                                            2,
                                       ),
 
                                       Text(
                                         _locationText,
-                                        style: AppTextStyles
-                                            .label
-                                            .copyWith(
+                                        style:
+                                            AppTextStyles
+                                                .label
+                                                .copyWith(
                                           fontSize:
-                                              12,
+                                              isAndroid
+                                                  ? 11
+                                                  : 12,
                                           fontWeight:
                                               FontWeight
                                                   .w600,
@@ -239,17 +364,27 @@ class FloatingTopBar extends StatelessWidget {
                                   ),
                                 ),
 
-                                const SizedBox(
-                                  width: 6,
+                                SizedBox(
+                                  width:
+                                      isAndroid
+                                          ? 4
+                                          : 6,
                                 ),
 
-                                const Icon(
+                                // =================================
+                                // NAVIGATION ICON
+                                // =================================
+
+                                Icon(
                                   Icons
                                       .near_me_rounded,
                                   color:
                                       AppColors
                                           .primaryTeal,
-                                  size: 16,
+                                  size:
+                                      isAndroid
+                                          ? 15
+                                          : 16,
                                 ),
                               ],
                             ),
@@ -260,48 +395,60 @@ class FloatingTopBar extends StatelessWidget {
                   ),
                 ),
 
-                const SizedBox(
-                  width: 10,
+                SizedBox(
+                  width:
+                      isAndroid ? 8 : 10,
                 ),
 
-                // =====================================================
+                // =================================================
                 // CLICKABLE USER AVATAR
-                // =====================================================
+                // =================================================
 
                 Material(
                   color:
                       Colors.transparent,
-                  child: InkWell(
+                  child:
+                      InkWell(
                     onTap:
                         onProfileTap,
                     borderRadius:
                         BorderRadius.circular(
                       30,
                     ),
-                    child: Padding(
+                    child:
+                        Padding(
                       padding:
                           const EdgeInsets.all(
                         2,
                       ),
-                      child: Stack(
+                      child:
+                          Stack(
                         clipBehavior:
                             Clip.none,
                         children: [
                           Container(
-                            width: 44,
-                            height: 44,
+                            width:
+                                isAndroid
+                                    ? 42
+                                    : 44,
+                            height:
+                                isAndroid
+                                    ? 42
+                                    : 44,
                             decoration:
                                 BoxDecoration(
                               gradient:
                                   AppColors
                                       .navyGradient,
                               shape:
-                                  BoxShape.circle,
-                              boxShadow: const [
+                                  BoxShape
+                                      .circle,
+                              boxShadow:
+                                  const [
                                 BoxShadow(
                                   color:
                                       AppColors
-                                          .shadowLight,
+                                      .shadowLight,
                                   blurRadius:
                                       12,
                                   offset:
@@ -312,7 +459,6 @@ class FloatingTopBar extends StatelessWidget {
                                 ),
                               ],
                             ),
-
                             child:
                                 ClipOval(
                               child:
@@ -323,11 +469,11 @@ class FloatingTopBar extends StatelessWidget {
                                           imageUrl:
                                               avatarUrl,
                                           fit:
-                                              BoxFit.cover,
+                                              BoxFit
+                                                  .cover,
 
-                                          // Show initial while
-                                          // the image is loading.
-                                          placeholder: (
+                                          placeholder:
+                                              (
                                             context,
                                             url,
                                           ) {
@@ -337,10 +483,8 @@ class FloatingTopBar extends StatelessWidget {
                                             );
                                           },
 
-                                          // Show initial if Google
-                                          // returns 429 or another
-                                          // image loading error.
-                                          errorWidget: (
+                                          errorWidget:
+                                              (
                                             context,
                                             url,
                                             error,
@@ -356,8 +500,6 @@ class FloatingTopBar extends StatelessWidget {
                                             );
                                           },
                                         )
-
-                                      // No avatar URL available.
                                       : _AvatarInitial(
                                           initial:
                                               initial,
@@ -365,9 +507,9 @@ class FloatingTopBar extends StatelessWidget {
                             ),
                           ),
 
-                          // =================================================
+                          // =========================================
                           // VERIFIED BADGE
-                          // =================================================
+                          // =========================================
 
                           if (isVerified)
                             Positioned(
@@ -411,98 +553,136 @@ class FloatingTopBar extends StatelessWidget {
               ],
             ),
 
-            const SizedBox(
-              height: 8,
+            // =======================================================
+            // GAP
+            // =======================================================
+
+            SizedBox(
+              height:
+                  isAndroid ? 5 : 8,
             ),
 
-            // =========================================================
+            // =======================================================
             // MODE SWITCHER
-            // =========================================================
+            // =======================================================
 
-            Container(
-              padding:
-                  const EdgeInsets.all(
-                4,
-              ),
-              decoration:
-                  BoxDecoration(
-                color:
-                    AppColors
-                        .midnightBlue
-                        .withAlpha(
-                      230,
-                    ),
-                borderRadius:
-                    BorderRadius.circular(
-                  20,
-                ),
-                boxShadow:
-                    const [
-                  BoxShadow(
-                    color:
-                        AppColors
-                            .shadowHeavy,
-                    blurRadius:
-                        16,
-                    offset:
-                        Offset(
-                      0,
-                      4,
-                    ),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisSize:
-                    MainAxisSize.min,
-                children: [
-                  _ModeButton(
-                    label:
-                        'Traveller Mode',
-                    icon:
-                        Icons
-                            .person_pin_circle_rounded,
-                    isSelected:
-                        !isRiderMode,
-                    onTap: () {
-                      HapticFeedback
-                          .selectionClick();
-
-                      onModeChanged(
-                        false,
-                      );
-                    },
-                  ),
-
-                  const SizedBox(
-                    width: 4,
-                  ),
-
-                  _ModeButton(
-                    label:
-                        'Host Mode (Offer Ride)',
-                    icon:
-                        Icons
-                            .drive_eta_rounded,
-                    isSelected:
-                        isRiderMode,
-                    onTap: () {
-                      HapticFeedback
-                          .selectionClick();
-
-                      onModeChanged(
-                        true,
-                      );
-                    },
-                  ),
-                ],
-              ),
+            _buildModeSwitcher(
+              isAndroid:
+                  isAndroid,
             ),
           ],
         ),
       ),
     );
   }
+
+  // ===============================================================
+  // MODE SWITCHER
+  // ===============================================================
+
+  Widget _buildModeSwitcher({
+    required bool isAndroid,
+  }) {
+    return Container(
+      padding:
+          const EdgeInsets.all(
+        4,
+      ),
+      decoration:
+          BoxDecoration(
+        color:
+            AppColors
+                .midnightBlue
+                .withAlpha(
+          230,
+        ),
+        borderRadius:
+            BorderRadius.circular(
+          20,
+        ),
+        boxShadow:
+            const [
+          BoxShadow(
+            color:
+                AppColors
+                    .shadowHeavy,
+            blurRadius:
+                16,
+            offset:
+                Offset(
+              0,
+              4,
+            ),
+          ),
+        ],
+      ),
+      child:
+          Row(
+        mainAxisSize:
+            MainAxisSize.min,
+        children: [
+          // =======================================================
+          // TRAVELLER MODE
+          // =======================================================
+
+          _ModeButton(
+            label:
+                'Traveller Mode',
+            icon:
+                Icons
+                    .person_pin_circle_rounded,
+            isSelected:
+                !isRiderMode,
+            onTap: () {
+              HapticFeedback
+                  .selectionClick();
+
+              // false = Traveller
+              onModeChanged(
+                false,
+              );
+            },
+            isAndroid:
+                isAndroid,
+          ),
+
+          SizedBox(
+            width:
+                isAndroid ? 2 : 4,
+          ),
+
+          // =======================================================
+          // HOST MODE
+          // =======================================================
+
+          _ModeButton(
+            label:
+                'Host Mode (Offer Ride)',
+            icon:
+                Icons
+                    .drive_eta_rounded,
+            isSelected:
+                isRiderMode,
+            onTap: () {
+              HapticFeedback
+                  .selectionClick();
+
+              // true = Host
+              onModeChanged(
+                true,
+              );
+            },
+            isAndroid:
+                isAndroid,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===============================================================
+  // LOCATION TEXT
+  // ===============================================================
 
   /// Returns the best available location text.
   String get _locationText {
@@ -523,7 +703,8 @@ class FloatingTopBar extends StatelessWidget {
 // AVATAR INITIAL FALLBACK
 // ===============================================================
 
-class _AvatarInitial extends StatelessWidget {
+class _AvatarInitial
+    extends StatelessWidget {
   final String initial;
 
   const _AvatarInitial({
@@ -535,12 +716,14 @@ class _AvatarInitial extends StatelessWidget {
     BuildContext context,
   ) {
     return Center(
-      child: Text(
+      child:
+          Text(
         initial,
         style:
             AppTextStyles.h3.copyWith(
           color:
-              AppColors.primaryTeal,
+              AppColors
+                  .primaryTeal,
           fontWeight:
               FontWeight.w800,
         ),
@@ -554,17 +737,20 @@ class _AvatarInitial extends StatelessWidget {
 // MODE BUTTON
 // ===============================================================
 
-class _ModeButton extends StatelessWidget {
+class _ModeButton
+    extends StatelessWidget {
   final String label;
   final IconData icon;
   final bool isSelected;
   final VoidCallback onTap;
+  final bool isAndroid;
 
   const _ModeButton({
     required this.label,
     required this.icon,
     required this.isSelected,
     required this.onTap,
+    required this.isAndroid,
   });
 
   @override
@@ -572,6 +758,8 @@ class _ModeButton extends StatelessWidget {
     BuildContext context,
   ) {
     return GestureDetector(
+      behavior:
+          HitTestBehavior.opaque,
       onTap:
           onTap,
       child:
@@ -580,10 +768,14 @@ class _ModeButton extends StatelessWidget {
             const Duration(
           milliseconds: 200,
         ),
+        curve:
+            Curves.easeOut,
         padding:
-            const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 7,
+            EdgeInsets.symmetric(
+          horizontal:
+              isAndroid ? 10 : 14,
+          vertical:
+              isAndroid ? 6 : 7,
         ),
         decoration:
             BoxDecoration(
@@ -598,14 +790,15 @@ class _ModeButton extends StatelessWidget {
             16,
           ),
         ),
-        child: Row(
+        child:
+            Row(
           mainAxisSize:
               MainAxisSize.min,
           children: [
             Icon(
               icon,
               size:
-                  15,
+                  isAndroid ? 14 : 15,
               color:
                   isSelected
                       ? AppColors
@@ -617,8 +810,9 @@ class _ModeButton extends StatelessWidget {
                       ),
             ),
 
-            const SizedBox(
-              width: 6,
+            SizedBox(
+              width:
+                  isAndroid ? 5 : 6,
             ),
 
             Text(
@@ -628,7 +822,7 @@ class _ModeButton extends StatelessWidget {
                       .label
                       .copyWith(
                 fontSize:
-                    12,
+                    isAndroid ? 11 : 12,
                 fontWeight:
                     isSelected
                         ? FontWeight

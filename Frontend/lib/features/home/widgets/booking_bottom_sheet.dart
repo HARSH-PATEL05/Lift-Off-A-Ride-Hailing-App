@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -13,6 +14,12 @@ import 'book_ride_button.dart';
 /// The sheet slightly overlaps the map from HomeScreen
 /// to create a seamless transition between the map
 /// and the search section.
+///
+/// On Android, HomeScreen manually moves this sheet above
+/// the keyboard when the source/destination field is focused.
+/// The sheet itself remains scrollable so suggestions and
+/// booking content can be accessed without changing the
+/// existing Web/Windows design.
 class BookingBottomSheet extends StatelessWidget {
   final String selectedServiceId;
 
@@ -58,13 +65,29 @@ class BookingBottomSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final mediaQuery =
+        MediaQuery.of(context);
+
+    final isAndroid =
+        defaultTargetPlatform ==
+            TargetPlatform.android;
+
+    // ------------------------------------------------------------
+    // Bottom safe-area inset.
+    //
+    // HomeScreen handles the keyboard position itself on Android,
+    // therefore we intentionally use only the normal safe-area
+    // padding here.
+    // ------------------------------------------------------------
+
     final bottomPadding =
-        MediaQuery.of(context).padding.bottom;
+        mediaQuery.padding.bottom;
 
     return Container(
       decoration:
           const BoxDecoration(
-        color: AppColors.white,
+        color:
+            AppColors.white,
 
         borderRadius:
             BorderRadius.only(
@@ -84,7 +107,10 @@ class BookingBottomSheet extends StatelessWidget {
                 24,
 
             offset:
-                Offset(0, -4),
+                Offset(
+              0,
+              -4,
+            ),
           ),
         ],
       ),
@@ -93,15 +119,24 @@ class BookingBottomSheet extends StatelessWidget {
         physics:
             const BouncingScrollPhysics(),
 
+        // ----------------------------------------------------------
+        // Keep existing Web/Windows spacing.
+        //
+        // Android gets a slightly smaller horizontal inset so the
+        // search fields have a little more available width.
+        // ----------------------------------------------------------
+
         padding:
             EdgeInsets.fromLTRB(
-          20,
+          isAndroid
+              ? 16
+              : 20,
 
-          // Reduced from 8.
-          // Keeps the content closer to the map.
           6,
 
-          20,
+          isAndroid
+              ? 16
+              : 20,
 
           bottomPadding + 16,
         ),
@@ -113,8 +148,11 @@ class BookingBottomSheet extends StatelessWidget {
 
           Center(
             child: Container(
-              width: 40,
-              height: 4,
+              width:
+                  40,
+
+              height:
+                  4,
 
               decoration:
                   BoxDecoration(
@@ -129,9 +167,9 @@ class BookingBottomSheet extends StatelessWidget {
             ),
           ),
 
-          // Reduced spacing between handle and search section.
           const SizedBox(
-            height: 6,
+            height:
+                6,
           ),
 
           // ==========================================================
@@ -170,7 +208,8 @@ class BookingBottomSheet extends StatelessWidget {
           ),
 
           const SizedBox(
-            height: 16,
+            height:
+                16,
           ),
 
           // ==========================================================
@@ -189,7 +228,8 @@ class BookingBottomSheet extends StatelessWidget {
           ),
 
           const SizedBox(
-            height: 24,
+            height:
+                24,
           ),
 
           // ==========================================================
@@ -199,7 +239,8 @@ class BookingBottomSheet extends StatelessWidget {
           const PromoCarousel(),
 
           const SizedBox(
-            height: 24,
+            height:
+                24,
           ),
 
           // ==========================================================

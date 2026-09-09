@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -15,11 +17,18 @@ import '../../../core/services/google_places_service.dart';
 
 /// LiftOff Main Home Screen.
 ///
-/// Layout:
-/// - Map occupies the upper section.
-/// - Booking sheet overlaps the bottom edge of the map.
-/// - Fullscreen mode expands the same MapView.
-/// - Google Map remains alive while resizing.
+/// Traveller mode:
+/// - Google Map
+/// - Floating top bar
+/// - Booking/search area
+///
+/// Host mode:
+/// - RiderHostDashboard
+///
+/// Platform behavior:
+/// - Web/Windows keep the existing layout.
+/// - Android manually moves the COMPLETE booking panel
+///   above the keyboard when text input is active.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -28,8 +37,19 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool _isRiderMode = false;
+  // ============================================================
+  // MODE
+  // ============================================================
+
+  /// false = Traveller
+  /// true  = Host
+  bool _isHostMode = false;
+
   bool _isMapFullscreen = false;
+
+  // ============================================================
+  // SERVICE
+  // ============================================================
 
   String _selectedServiceId =
       MockData.communityRides.first.id;
@@ -61,17 +81,10 @@ class _HomeScreenState extends State<HomeScreen> {
   // LIVE LOCATION STATE
   // ============================================================
 
-  /// Complete address.
-  ///
-  /// Example:
-  /// "Street Name, Sector 62, Noida,
-  /// Uttar Pradesh 201309, India"
+  /// Complete address internally.
   String? _liveLocationAddress;
 
-  /// Short address shown only in the top header.
-  ///
-  /// Example:
-  /// "Sector 62, Noida"
+  /// Short Area + City address shown in FloatingTopBar.
   String? _shortLiveLocationAddress;
 
   bool _showLiveLocationMarker = false;
@@ -81,6 +94,10 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================
 
   MapSelectionMode? _mapSelectionMode;
+
+  // ============================================================
+  // INIT
+  // ============================================================
 
   @override
   void initState() {
@@ -206,8 +223,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
 
-        position =
-            lastPosition;
+        position = lastPosition;
       }
 
       debugPrint(
@@ -248,11 +264,9 @@ class _HomeScreenState extends State<HomeScreen> {
             fullAddress.trim();
 
         setState(() {
-          // Keep complete address internally.
           _liveLocationAddress =
               cleanedAddress;
 
-          // Only short version goes to header.
           _shortLiveLocationAddress =
               _getAreaAndCity(
             cleanedAddress,
@@ -292,26 +306,11 @@ class _HomeScreenState extends State<HomeScreen> {
   // AREA + CITY FORMATTER
   // ============================================================
 
-  /// Converts Google's complete formatted address into
-  /// a cleaner Area + City format.
-  ///
-  /// Example:
-  ///
-  /// Complete:
-  /// "123 Main Road, Sector 62, Noida,
-  /// Gautam Buddha Nagar, Uttar Pradesh 201309, India"
-  ///
-  /// Header:
-  /// "Sector 62, Noida"
   String _getAreaAndCity(
     String fullAddress,
   ) {
     final address =
         fullAddress.trim();
-
-    // ----------------------------------------------------------
-    // Loading / error messages should not be parsed.
-    // ----------------------------------------------------------
 
     const systemMessages = [
       'Getting your location...',
@@ -325,11 +324,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (systemMessages.contains(address)) {
       return address;
     }
-
-    // ----------------------------------------------------------
-    // Prevent "Location near latitude, longitude"
-    // from appearing as Area + City.
-    // ----------------------------------------------------------
 
     if (address
         .toLowerCase()
@@ -361,11 +355,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final lower =
           part.toLowerCase();
 
-      if (lower == 'india') {
-        return false;
-      }
-
-      return true;
+      return lower != 'india';
     }).toList();
 
     if (filteredParts.isEmpty) {
@@ -373,13 +363,45 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     // ----------------------------------------------------------
-    // Remove obvious state/PIN components from the end.
+    // Remove state / PIN from end.
     // ----------------------------------------------------------
 
     final locationParts =
         List<String>.from(
       filteredParts,
     );
+
+    final indianStates = [
+      'andhra pradesh',
+      'arunachal pradesh',
+      'assam',
+      'bihar',
+      'chhattisgarh',
+      'goa',
+      'gujarat',
+      'haryana',
+      'himachal pradesh',
+      'jharkhand',
+      'karnataka',
+      'kerala',
+      'madhya pradesh',
+      'maharashtra',
+      'manipur',
+      'meghalaya',
+      'mizoram',
+      'nagaland',
+      'odisha',
+      'punjab',
+      'rajasthan',
+      'sikkim',
+      'tamil nadu',
+      'telangana',
+      'tripura',
+      'uttar pradesh',
+      'uttarakhand',
+      'west bengal',
+      'delhi',
+    ];
 
     while (locationParts.isNotEmpty) {
       final last =
@@ -388,43 +410,10 @@ class _HomeScreenState extends State<HomeScreen> {
       final lower =
           last.toLowerCase();
 
-      // Indian PIN code pattern.
       final hasPinCode =
           RegExp(
         r'\b\d{6}\b',
       ).hasMatch(last);
-
-      final indianStates = [
-        'andhra pradesh',
-        'arunachal pradesh',
-        'assam',
-        'bihar',
-        'chhattisgarh',
-        'goa',
-        'gujarat',
-        'haryana',
-        'himachal pradesh',
-        'jharkhand',
-        'karnataka',
-        'kerala',
-        'madhya pradesh',
-        'maharashtra',
-        'manipur',
-        'meghalaya',
-        'mizoram',
-        'nagaland',
-        'odisha',
-        'punjab',
-        'rajasthan',
-        'sikkim',
-        'tamil nadu',
-        'telangana',
-        'tripura',
-        'uttar pradesh',
-        'uttarakhand',
-        'west bengal',
-        'delhi',
-      ];
 
       final isState =
           indianStates.any(
@@ -438,11 +427,6 @@ class _HomeScreenState extends State<HomeScreen> {
         break;
       }
     }
-
-    // ----------------------------------------------------------
-    // If enough information exists, take the last two
-    // locality-related components.
-    // ----------------------------------------------------------
 
     if (locationParts.length >= 2) {
       return '${locationParts[locationParts.length - 2]}, '
@@ -494,16 +478,26 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================
 
   void _onModeChanged(
-    bool isRider,
+    bool isHost,
   ) {
-    setState(() {
-      _isRiderMode =
-          isRider;
+    // Already in requested mode.
+    if (_isHostMode == isHost) {
+      return;
+    }
 
-      if (isRider) {
-        _isMapFullscreen =
-            false;
+    // Close keyboard before changing mode.
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    setState(() {
+      _isHostMode = isHost;
+
+      // Host mode does not use map fullscreen.
+      if (isHost) {
+        _isMapFullscreen = false;
       }
+
+      // Clear map-selection mode when changing mode.
+      _mapSelectionMode = null;
     });
   }
 
@@ -515,8 +509,7 @@ class _HomeScreenState extends State<HomeScreen> {
     bool value,
   ) {
     setState(() {
-      _isMapFullscreen =
-          value;
+      _isMapFullscreen = value;
     });
   }
 
@@ -528,8 +521,7 @@ class _HomeScreenState extends State<HomeScreen> {
     String serviceId,
   ) {
     setState(() {
-      _selectedServiceId =
-          serviceId;
+      _selectedServiceId = serviceId;
     });
   }
 
@@ -539,15 +531,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _onBook() {
     setState(() {
-      _showRideStatus =
-          true;
+      _showRideStatus = true;
     });
   }
 
   void _onCloseRideStatus() {
     setState(() {
-      _showRideStatus =
-          false;
+      _showRideStatus = false;
     });
   }
 
@@ -565,33 +555,23 @@ class _HomeScreenState extends State<HomeScreen> {
         ++_routeRequestId;
 
     setState(() {
-      _routeSource =
-          source;
+      _routeSource = source;
 
-      _routeDestination =
-          destination;
+      _routeDestination = destination;
 
-      // Keep complete addresses.
-      _sourceAddress =
-          sourceName;
+      _sourceAddress = sourceName;
 
-      _destinationAddress =
-          destinationName;
+      _destinationAddress = destinationName;
 
-      _routeCoordinates =
-          [];
+      _routeCoordinates = [];
 
-      _routeDistance =
-          null;
+      _routeDistance = null;
 
-      _routeDuration =
-          null;
+      _routeDuration = null;
 
-      _isSearchingRoute =
-          true;
+      _isSearchingRoute = true;
 
-      _showLiveLocationMarker =
-          false;
+      _showLiveLocationMarker = false;
     });
 
     try {
@@ -618,8 +598,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _routeDuration =
             routeResult.durationText;
 
-        _isSearchingRoute =
-            false;
+        _isSearchingRoute = false;
       });
     } catch (e) {
       debugPrint(
@@ -633,17 +612,13 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       setState(() {
-        _routeCoordinates =
-            [];
+        _routeCoordinates = [];
 
-        _routeDistance =
-            null;
+        _routeDistance = null;
 
-        _routeDuration =
-            null;
+        _routeDuration = null;
 
-        _isSearchingRoute =
-            false;
+        _isSearchingRoute = false;
       });
 
       ScaffoldMessenger.of(context)
@@ -662,6 +637,8 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================
 
   void _onSelectSourceFromMap() {
+    FocusManager.instance.primaryFocus?.unfocus();
+
     setState(() {
       _mapSelectionMode =
           MapSelectionMode.source;
@@ -680,6 +657,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onSelectDestinationFromMap() {
+    FocusManager.instance.primaryFocus?.unfocus();
+
     setState(() {
       _mapSelectionMode =
           MapSelectionMode.destination;
@@ -708,29 +687,22 @@ class _HomeScreenState extends State<HomeScreen> {
         ++_routeRequestId;
 
     setState(() {
-      _routeSource =
-          position;
+      _routeSource = position;
 
-      _routeCoordinates =
-          [];
+      _routeCoordinates = [];
 
-      _routeDistance =
-          null;
+      _routeDistance = null;
 
-      _routeDuration =
-          null;
+      _routeDuration = null;
 
-      _mapSelectionMode =
-          null;
+      _mapSelectionMode = null;
 
-      _showLiveLocationMarker =
-          false;
+      _showLiveLocationMarker = false;
     });
 
     String address;
 
     try {
-      // This returns COMPLETE Google formatted address.
       address =
           await GooglePlacesService.instance
               .getAddressFromCoordinates(
@@ -752,9 +724,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
-      // FULL ADDRESS ONLY.
-      _sourceAddress =
-          address;
+      _sourceAddress = address;
     });
 
     if (_routeSource != null &&
@@ -781,29 +751,22 @@ class _HomeScreenState extends State<HomeScreen> {
         ++_routeRequestId;
 
     setState(() {
-      _routeDestination =
-          position;
+      _routeDestination = position;
 
-      _routeCoordinates =
-          [];
+      _routeCoordinates = [];
 
-      _routeDistance =
-          null;
+      _routeDistance = null;
 
-      _routeDuration =
-          null;
+      _routeDuration = null;
 
-      _mapSelectionMode =
-          null;
+      _mapSelectionMode = null;
 
-      _showLiveLocationMarker =
-          false;
+      _showLiveLocationMarker = false;
     });
 
     String address;
 
     try {
-      // This returns COMPLETE Google formatted address.
       address =
           await GooglePlacesService.instance
               .getAddressFromCoordinates(
@@ -825,9 +788,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
-      // FULL ADDRESS ONLY.
-      _destinationAddress =
-          address;
+      _destinationAddress = address;
     });
 
     if (_routeSource != null &&
@@ -851,11 +812,42 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(
     BuildContext context,
   ) {
+    final mediaQuery =
+        MediaQuery.of(context);
+
     final screenHeight =
-        MediaQuery.of(context).size.height;
+        mediaQuery.size.height;
 
     final topPadding =
-        MediaQuery.of(context).padding.top;
+        mediaQuery.padding.top;
+
+    final isAndroid =
+        defaultTargetPlatform ==
+            TargetPlatform.android;
+
+    // ==========================================================
+    // KEYBOARD
+    // ==========================================================
+
+    final keyboardHeight =
+        isAndroid
+            ? mediaQuery.viewInsets.bottom
+            : 0.0;
+
+    final isKeyboardOpen =
+        isAndroid &&
+        keyboardHeight > 0;
+
+    // ==========================================================
+    // MAP HEIGHT
+    // ==========================================================
+    //
+    // IMPORTANT:
+    //
+    // The map keeps its normal height.
+    //
+    // The keyboard does NOT resize the map.
+    // ==========================================================
 
     final mapHeight =
         (screenHeight * 0.60).clamp(
@@ -863,27 +855,89 @@ class _HomeScreenState extends State<HomeScreen> {
       520.0,
     );
 
-    const sheetOverlap =
-        60.0;
+    const sheetOverlap = 60.0;
+
+    final normalBookingTop =
+        mapHeight - sheetOverlap;
+
+    // ==========================================================
+    // BOOKING PANEL HEIGHT
+    // ==========================================================
+    //
+    // This is the key fix.
+    //
+    // Previously:
+    //
+    // Positioned(
+    //   top: normalBookingTop,
+    //   bottom: 0,
+    // )
+    //
+    // followed by Transform.translate().
+    //
+    // That moved the visual panel but its original layout
+    // rectangle remained in place, producing the white gap.
+    //
+    // Now the panel is ACTUALLY repositioned.
+    // ==========================================================
+
+    final bookingPanelHeight =
+        screenHeight -
+            normalBookingTop;
+
+    // ==========================================================
+    // BOOKING PANEL BOTTOM
+    // ==========================================================
+    //
+    // Normal:
+    // bottom = 0
+    //
+    // Keyboard:
+    // bottom = keyboardHeight
+    //
+    // Therefore the COMPLETE panel sits directly above
+    // the keyboard.
+    // ==========================================================
+
+    final bookingPanelBottom =
+        isKeyboardOpen
+            ? keyboardHeight
+            : 0.0;
 
     return Scaffold(
+      // ========================================================
+      // KEYBOARD RESIZE
+      // ========================================================
+      //
+      // Android:
+      // We manually position the booking panel.
+      //
+      // Web / Windows:
+      // Keep the original Flutter behavior.
+      // ========================================================
+
+      resizeToAvoidBottomInset:
+          !isAndroid,
+
       body: Stack(
+        clipBehavior:
+            Clip.none,
         children: [
           // ======================================================
           // HOST MODE
           // ======================================================
 
-          if (_isRiderMode)
+          if (_isHostMode)
             const Positioned.fill(
               child:
                   RiderHostDashboard(),
             ),
 
           // ======================================================
-          // MAP
+          // TRAVELLER MAP
           // ======================================================
 
-          if (!_isRiderMode)
+          if (!_isHostMode)
             AnimatedPositioned(
               duration:
                   const Duration(
@@ -891,14 +945,17 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               curve:
                   Curves.easeInOut,
+
               top: 0,
               left: 0,
               right: 0,
+
               bottom:
                   _isMapFullscreen
                       ? 0
                       : screenHeight -
                           mapHeight,
+
               child:
                   MapView(
                 isFullscreen:
@@ -931,18 +988,33 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
           // ======================================================
-          // BOOKING AREA
+          // TRAVELLER BOOKING PANEL
+          // ======================================================
+          //
+          // IMPORTANT:
+          //
+          // We do NOT use Transform.translate anymore.
+          //
+          // The entire panel is physically repositioned using:
+          //
+          //   bottom: keyboardHeight
+          //   height: bookingPanelHeight
+          //
+          // This removes the white empty layout area.
           // ======================================================
 
-          if (!_isRiderMode &&
+          if (!_isHostMode &&
               !_isMapFullscreen)
             Positioned(
-              top:
-                  mapHeight -
-                      sheetOverlap,
               left: 0,
               right: 0,
-              bottom: 0,
+
+              bottom:
+                  bookingPanelBottom,
+
+              height:
+                  bookingPanelHeight,
+
               child:
                   _showRideStatus
                       ? LiveRideDrawer(
@@ -959,11 +1031,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           onBook:
                               _onBook,
 
-                          // FULL GOOGLE ADDRESS
                           initialSource:
                               _sourceAddress,
 
-                          // FULL GOOGLE ADDRESS
                           initialDestination:
                               _destinationAddress,
 
@@ -988,24 +1058,36 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
           // ======================================================
-          // TOP HEADER
+          // FLOATING TOP BAR
+          // ======================================================
+          //
+          // FloatingTopBar already contains SafeArea.
+          //
+          // Android:
+          // top = 0
+          //
+          // Web / Windows:
+          // preserve existing top positioning.
           // ======================================================
 
           if (!_isMapFullscreen)
             Positioned(
               top:
-                  topPadding + 4,
+                  isAndroid
+                      ? 0
+                      : topPadding + 4,
+
               left: 0,
               right: 0,
+
               child:
                   FloatingTopBar(
                 isRiderMode:
-                    _isRiderMode,
+                    _isHostMode,
 
                 onModeChanged:
                     _onModeChanged,
 
-                // ONLY AREA + CITY.
                 liveLocationAddress:
                     _shortLiveLocationAddress,
 
@@ -1021,27 +1103,35 @@ class _HomeScreenState extends State<HomeScreen> {
           // FULLSCREEN BACK BUTTON
           // ======================================================
 
-          if (!_isRiderMode &&
+          if (!_isHostMode &&
               _isMapFullscreen)
             Positioned(
               top:
                   topPadding + 8,
+
               left: 12,
+
               child:
                   Material(
                 elevation: 5,
+
                 color:
                     Colors.white,
+
                 shape:
                     const CircleBorder(),
+
                 child:
                     IconButton(
                   tooltip:
                       'Exit fullscreen',
+
                   icon:
                       const Icon(
-                    Icons.arrow_back_rounded,
+                    Icons
+                        .arrow_back_rounded,
                   ),
+
                   onPressed:
                       () {
                     _onMapFullscreenChanged(
