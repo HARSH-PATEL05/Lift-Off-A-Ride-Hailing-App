@@ -8,6 +8,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../../../core/data/mock_data.dart';
+import '../../../core/services/location_service.dart';
 import '../../../core/theme/app_colors.dart';
 
 /// Identifies which location is currently being selected from the map.
@@ -18,8 +19,27 @@ enum MapSelectionMode {
 
 /// Interactive Live Map View.
 ///
-/// Features:
-/// - Live GPS tracking
+/// Location architecture:
+///
+///     Phone GPS
+///         │
+///         ▼
+///   LocationService
+///         │
+///         └── livePositionStream
+///                  │
+///                  ▼
+///               MapView
+///
+/// MapView does NOT:
+/// - create its own GPS stream
+/// - persist GPS locations
+/// - monitor GPS service status
+/// - read SharedPreferences directly
+///
+/// All location ownership belongs to LocationService.
+///
+/// Other features:
 /// - Safe meeting node markers
 /// - Active corridor polylines
 /// - Actual road route polyline
@@ -67,105 +87,184 @@ class MapView extends StatefulWidget {
 
 class _MapViewState extends State<MapView>
     with AutomaticKeepAliveClientMixin {
+  // ============================================================
+  // MAP
+  // ============================================================
+
   GoogleMapController? _mapController;
-
-  LatLng _currentPosition = LatLng(
-    MockData.userLocation.latitude,
-    MockData.userLocation.longitude,
-  );
-
-  bool _isLocating = false;
-
-  MapType _mapType = MapType.normal;
-
-  StreamSubscription<Position>? _positionStreamSubscription;
 
   bool _mapCreated = false;
 
   bool _hasMovedToInitialPosition = false;
 
+  MapType _mapType = MapType.normal;
+
+  // ============================================================
+  // CENTRALIZED LOCATION SERVICE
+  // ============================================================
+
+  final LocationService _locationService =
+      LocationService.instance;
+
+  /// Listen to the ONE centralized live GPS stream.
+  StreamSubscription<LatLng>?
+      _livePositionSubscription;
+
+  /// Current live/fallback position used by the map.
+  ///
+  /// It is initialized from LocationService instead of
+  /// MockData.userLocation whenever a persisted/current
+  /// location is available.
+  late LatLng _currentPosition;
+
+  /// Whether we currently have a real location.
+  bool _hasRealLocation = false;
+
+  /// Prevents repeated recenter requests while obtaining GPS.
+  bool _isLocating = false;
+
+  // ============================================================
+  // MARKERS
+  // ============================================================
+
   BitmapDescriptor? _sourceIcon;
+
   BitmapDescriptor? _destinationIcon;
+
+  // ============================================================
+  // KEEP ALIVE
+  // ============================================================
 
   @override
   bool get wantKeepAlive => true;
 
   // ============================================================
-  // LIFECYCLE
+  // INIT
   // ============================================================
 
   @override
   void initState() {
     super.initState();
 
-    _initLiveLocation();
+    // ----------------------------------------------------------
+    // Determine the initial map position.
+    //
+    // LocationService has already loaded the persisted location
+    // or may already have a live GPS position.
+    //
+    // If neither exists, use the existing MockData fallback.
+    // ----------------------------------------------------------
+
+    final servicePosition =
+        _locationService.currentPosition;
+
+    if (servicePosition != null) {
+      _currentPosition =
+          servicePosition;
+
+      _hasRealLocation =
+          _locationService.hasRealLocation;
+    } else {
+      _currentPosition = LatLng(
+        MockData.userLocation.latitude,
+        MockData.userLocation.longitude,
+      );
+
+      _hasRealLocation = false;
+    }
+
+    // ----------------------------------------------------------
+    // Listen to centralized live location.
+    // ----------------------------------------------------------
+
+    _listenToLiveLocation();
+
+    // ----------------------------------------------------------
+    // Load custom route markers.
+    // ----------------------------------------------------------
+
     _initCustomMarkers();
   }
 
-  @override
-  void didUpdateWidget(
-    covariant MapView oldWidget,
-  ) {
-    super.didUpdateWidget(oldWidget);
+  // ============================================================
+  // LIVE LOCATION LISTENER
+  // ============================================================
 
-    final sourceChanged =
-        oldWidget.source != widget.source;
+  void _listenToLiveLocation() {
+    _livePositionSubscription =
+        _locationService.livePositionStream.listen(
+      (LatLng position) {
+        if (!mounted) return;
 
-    final destinationChanged =
-        oldWidget.destination != widget.destination;
+        debugPrint(
+          'MapView: CENTRALIZED LIVE LOCATION: '
+          '${position.latitude}, '
+          '${position.longitude}',
+        );
 
-    final routeChanged =
-        oldWidget.routeCoordinates !=
-            widget.routeCoordinates;
-
-    final liveLocationTapped =
-        !oldWidget.showLiveLocationMarker &&
-            widget.showLiveLocationMarker;
-
-    if (liveLocationTapped) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) {
-          if (!mounted) return;
-
-          _moveCameraTo(
-            _currentPosition,
-            zoom: 15.5,
-          );
-        },
-      );
-    }
-
-    /// Fit route when:
-    /// - both locations exist
-    /// - route coordinates are available
-    ///
-    /// This prevents fitting only the straight line before
-    /// the actual OSRM / Google road route arrives.
-    if ((sourceChanged ||
-            destinationChanged ||
-            routeChanged) &&
-        widget.source != null &&
-        widget.destination != null) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) {
-          if (!mounted) return;
-
-          _fitRouteInView();
-        },
-      );
-    }
+        _updateLivePosition(
+          position,
+          moveCamera:
+              !_hasMovedToInitialPosition,
+        );
+      },
+      onError: (error) {
+        debugPrint(
+          'MapView centralized location stream error: $error',
+        );
+      },
+    );
   }
+
+  // ============================================================
+  // DISPOSE
+  // ============================================================
 
   @override
   void dispose() {
-    _positionStreamSubscription?.cancel();
+    // ----------------------------------------------------------
+    // IMPORTANT:
+    //
+    // Do NOT dispose LocationService here.
+    //
+    // HomeScreen and MapView both use the same singleton.
+    // ----------------------------------------------------------
 
-    /// Do not manually dispose GoogleMapController.
-    ///
-    /// Flutter Web manages the underlying Google Maps instance.
+    _livePositionSubscription
+        ?.cancel();
+
     _mapController = null;
 
     super.dispose();
+  }
+
+  // ============================================================
+  // UPDATE LIVE POSITION
+  // ============================================================
+
+  void _updateLivePosition(
+    LatLng position, {
+    bool moveCamera = false,
+  }) {
+    if (!mounted) return;
+
+    setState(() {
+      _currentPosition =
+          position;
+
+      _hasRealLocation = true;
+    });
+
+    if (moveCamera &&
+        _mapCreated) {
+      _hasMovedToInitialPosition =
+          true;
+
+      _moveCameraTo(
+        position,
+        zoom: 15,
+      );
+    }
   }
 
   // ============================================================
@@ -183,8 +282,11 @@ class _MapViewState extends State<MapView>
       if (!mounted) return;
 
       setState(() {
-        _sourceIcon = pickup;
-        _destinationIcon = destination;
+        _sourceIcon =
+            pickup;
+
+        _destinationIcon =
+            destination;
       });
     } catch (error) {
       debugPrint(
@@ -204,45 +306,56 @@ class _MapViewState extends State<MapView>
     const size = 30.0;
 
     final paint =
-        Paint()..isAntiAlias = true;
+        Paint()
+          ..isAntiAlias = true;
 
-    // Outer halo
     paint.color =
         const Color(0xFF00C853)
-            .withValues(alpha: 0.25);
+            .withValues(
+          alpha: 0.25,
+        );
 
     canvas.drawCircle(
-      const Offset(size / 2, size / 2),
+      const Offset(
+        size / 2,
+        size / 2,
+      ),
       14,
       paint,
     );
 
-    // Main green circle
     paint.color =
         const Color(0xFF00A86B);
 
     canvas.drawCircle(
-      const Offset(size / 2, size / 2),
+      const Offset(
+        size / 2,
+        size / 2,
+      ),
       10,
       paint,
     );
 
-    // White center
     paint.color =
         Colors.white;
 
     canvas.drawCircle(
-      const Offset(size / 2, size / 2),
+      const Offset(
+        size / 2,
+        size / 2,
+      ),
       4.5,
       paint,
     );
 
-    // Inner green dot
     paint.color =
         const Color(0xFF00A86B);
 
     canvas.drawCircle(
-      const Offset(size / 2, size / 2),
+      const Offset(
+        size / 2,
+        size / 2,
+      ),
       2.2,
       paint,
     );
@@ -279,9 +392,11 @@ class _MapViewState extends State<MapView>
     const height = 36.0;
 
     final paint =
-        Paint()..isAntiAlias = true;
+        Paint()
+          ..isAntiAlias = true;
 
-    final path = Path();
+    final path =
+        Path();
 
     path.moveTo(
       width / 2,
@@ -301,7 +416,9 @@ class _MapViewState extends State<MapView>
         13,
       ),
       radius:
-          const Radius.circular(10),
+          const Radius.circular(
+        10,
+      ),
       clockwise: true,
     );
 
@@ -314,7 +431,6 @@ class _MapViewState extends State<MapView>
 
     path.close();
 
-    // Red pin
     paint.color =
         const Color(0xFFE53935);
 
@@ -323,21 +439,20 @@ class _MapViewState extends State<MapView>
       paint,
     );
 
-    // Border
     paint.color =
         const Color(0xFFB71C1C);
 
     paint.style =
         PaintingStyle.stroke;
 
-    paint.strokeWidth = 1.8;
+    paint.strokeWidth =
+        1.8;
 
     canvas.drawPath(
       path,
       paint,
     );
 
-    // White center
     paint.style =
         PaintingStyle.fill;
 
@@ -345,17 +460,22 @@ class _MapViewState extends State<MapView>
         Colors.white;
 
     canvas.drawCircle(
-      const Offset(width / 2, 13),
+      const Offset(
+        width / 2,
+        13,
+      ),
       5,
       paint,
     );
 
-    // Red center
     paint.color =
         const Color(0xFFE53935);
 
     canvas.drawCircle(
-      const Offset(width / 2, 13),
+      const Offset(
+        width / 2,
+        13,
+      ),
       2.5,
       paint,
     );
@@ -381,154 +501,6 @@ class _MapViewState extends State<MapView>
   }
 
   // ============================================================
-  // LIVE LOCATION
-  // ============================================================
-
-  Future<void> _initLiveLocation() async {
-    if (!mounted) return;
-
-    setState(() {
-      _isLocating = true;
-    });
-
-    try {
-      final serviceEnabled =
-          await Geolocator
-              .isLocationServiceEnabled();
-
-      if (!serviceEnabled) {
-        _showLocationServiceMessage();
-        return;
-      }
-
-      var permission =
-          await Geolocator
-              .checkPermission();
-
-      if (permission ==
-          LocationPermission.denied) {
-        permission =
-            await Geolocator
-                .requestPermission();
-      }
-
-      if (permission ==
-          LocationPermission.denied) {
-        return;
-      }
-
-      if (permission ==
-          LocationPermission.deniedForever) {
-        _showPermissionSettingsMessage();
-        return;
-      }
-
-      if (!kIsWeb) {
-        final lastKnown =
-            await Geolocator
-                .getLastKnownPosition();
-
-        if (lastKnown != null &&
-            mounted) {
-          _updateCurrentPosition(
-            LatLng(
-              lastKnown.latitude,
-              lastKnown.longitude,
-            ),
-            moveCamera:
-                !_hasMovedToInitialPosition,
-          );
-        }
-      }
-
-      final position =
-          await Geolocator
-              .getCurrentPosition(
-        locationSettings:
-            LocationSettings(
-          accuracy:
-              LocationAccuracy.high,
-          timeLimit: kIsWeb
-              ? null
-              : const Duration(
-                  seconds: 10,
-                ),
-        ),
-      );
-
-      if (!mounted) return;
-
-      _updateCurrentPosition(
-        LatLng(
-          position.latitude,
-          position.longitude,
-        ),
-        moveCamera: true,
-      );
-
-      await _positionStreamSubscription
-          ?.cancel();
-
-      _positionStreamSubscription =
-          Geolocator
-              .getPositionStream(
-        locationSettings:
-            const LocationSettings(
-          accuracy:
-              LocationAccuracy.high,
-          distanceFilter: 5,
-        ),
-      ).listen(
-        (position) {
-          if (!mounted) return;
-
-          setState(() {
-            _currentPosition =
-                LatLng(
-              position.latitude,
-              position.longitude,
-            );
-          });
-        },
-        onError: (error) {
-          debugPrint(
-            'Location stream error: $error',
-          );
-        },
-      );
-    } catch (error) {
-      debugPrint(
-        'Live location error: $error',
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLocating = false;
-        });
-      }
-    }
-  }
-
-  void _updateCurrentPosition(
-    LatLng position, {
-    bool moveCamera = false,
-  }) {
-    if (!mounted) return;
-
-    setState(() {
-      _currentPosition = position;
-    });
-
-    if (moveCamera &&
-        _mapCreated) {
-      _moveCameraTo(
-        position,
-        zoom: 15,
-      );
-    }
-  }
-
-  // ============================================================
   // CAMERA
   // ============================================================
 
@@ -546,11 +518,12 @@ class _MapViewState extends State<MapView>
 
     try {
       await controller.animateCamera(
-        CameraUpdate
-            .newCameraPosition(
+        CameraUpdate.newCameraPosition(
           CameraPosition(
-            target: position,
-            zoom: zoom,
+            target:
+                position,
+            zoom:
+                zoom,
           ),
         ),
       );
@@ -605,28 +578,31 @@ class _MapViewState extends State<MapView>
         points.first.longitude;
 
     for (final point in points) {
-      if (point.latitude < minLat) {
+      if (point.latitude <
+          minLat) {
         minLat =
             point.latitude;
       }
 
-      if (point.latitude > maxLat) {
+      if (point.latitude >
+          maxLat) {
         maxLat =
             point.latitude;
       }
 
-      if (point.longitude < minLng) {
+      if (point.longitude <
+          minLng) {
         minLng =
             point.longitude;
       }
 
-      if (point.longitude > maxLng) {
+      if (point.longitude >
+          maxLng) {
         maxLng =
             point.longitude;
       }
     }
 
-    // Prevent invalid bounds when points are very close.
     if ((maxLat - minLat).abs() <
         0.0001) {
       maxLat += 0.0005;
@@ -641,8 +617,7 @@ class _MapViewState extends State<MapView>
 
     try {
       await controller.animateCamera(
-        CameraUpdate
-            .newLatLngBounds(
+        CameraUpdate.newLatLngBounds(
           LatLngBounds(
             southwest:
                 LatLng(
@@ -684,6 +659,7 @@ class _MapViewState extends State<MapView>
       widget
           .onSourceSelectedFromMap
           ?.call(position);
+
       return;
     }
 
@@ -724,11 +700,13 @@ class _MapViewState extends State<MapView>
               const PolylineId(
             'corridor_glow',
           ),
-          points: corridor,
+          points:
+              corridor,
           width: 10,
-          color: AppColors
-              .primaryTeal
-              .withAlpha(70),
+          color:
+              AppColors
+                  .primaryTeal
+                  .withAlpha(70),
         ),
       );
 
@@ -738,17 +716,21 @@ class _MapViewState extends State<MapView>
               const PolylineId(
             'corridor_core',
           ),
-          points: corridor,
+          points:
+              corridor,
           width: 5,
           color:
-              AppColors.midnightBlue,
+              AppColors
+                  .midnightBlue,
         ),
       );
     }
 
     if (hasActiveRoute &&
-        widget.routeCoordinates != null &&
-        widget.routeCoordinates!.length >
+        widget.routeCoordinates !=
+            null &&
+        widget.routeCoordinates!
+                .length >
             1) {
       final points =
           widget.routeCoordinates!;
@@ -759,11 +741,15 @@ class _MapViewState extends State<MapView>
               const PolylineId(
             'searched_route_shadow',
           ),
-          points: points,
+          points:
+              points,
           width: 9,
-          color: AppColors
-              .midnightBlue
-              .withValues(alpha: 0.22),
+          color:
+              AppColors
+                  .midnightBlue
+                  .withValues(
+                alpha: 0.22,
+              ),
           startCap:
               Cap.roundCap,
           endCap:
@@ -779,7 +765,8 @@ class _MapViewState extends State<MapView>
               const PolylineId(
             'searched_route_core',
           ),
-          points: points,
+          points:
+              points,
           width: 5,
           color:
               const Color(
@@ -810,8 +797,14 @@ class _MapViewState extends State<MapView>
         widget.source != null &&
             widget.destination != null;
 
-    if (!hasActiveRoute ||
-        widget.showLiveLocationMarker) {
+    // ==========================================================
+    // USER LOCATION
+    // ==========================================================
+
+    if (_hasRealLocation &&
+        (!hasActiveRoute ||
+            widget
+                .showLiveLocationMarker)) {
       markers.add(
         Marker(
           markerId:
@@ -829,11 +822,15 @@ class _MapViewState extends State<MapView>
           infoWindow:
               const InfoWindow(
             title:
-                'Your Location',
+                'Your Current Location',
           ),
         ),
       );
     }
+
+    // ==========================================================
+    // SAFE MEETING NODES
+    // ==========================================================
 
     if (!hasActiveRoute) {
       for (final node
@@ -867,7 +864,12 @@ class _MapViewState extends State<MapView>
       }
     }
 
-    if (widget.source != null) {
+    // ==========================================================
+    // SOURCE
+    // ==========================================================
+
+    if (widget.source !=
+        null) {
       markers.add(
         Marker(
           markerId:
@@ -885,9 +887,9 @@ class _MapViewState extends State<MapView>
               _sourceIcon ??
                   BitmapDescriptor
                       .defaultMarkerWithHue(
-                    BitmapDescriptor
-                        .hueGreen,
-                  ),
+                BitmapDescriptor
+                    .hueGreen,
+              ),
           infoWindow:
               const InfoWindow(
             title:
@@ -897,7 +899,12 @@ class _MapViewState extends State<MapView>
       );
     }
 
-    if (widget.destination != null) {
+    // ==========================================================
+    // DESTINATION
+    // ==========================================================
+
+    if (widget.destination !=
+        null) {
       markers.add(
         Marker(
           markerId:
@@ -915,9 +922,9 @@ class _MapViewState extends State<MapView>
               _destinationIcon ??
                   BitmapDescriptor
                       .defaultMarkerWithHue(
-                    BitmapDescriptor
-                        .hueRed,
-                  ),
+                BitmapDescriptor
+                    .hueRed,
+              ),
           infoWindow:
               const InfoWindow(
             title:
@@ -931,44 +938,112 @@ class _MapViewState extends State<MapView>
   }
 
   // ============================================================
+  // LOCATION REQUEST
+  // ============================================================
+
+  Future<void> _refreshLocation() async {
+    if (_isLocating) {
+      return;
+    }
+
+    setState(() {
+      _isLocating = true;
+    });
+
+    try {
+      // --------------------------------------------------------
+      // LocationService owns the GPS logic.
+      //
+      // It:
+      // - checks GPS
+      // - checks permissions
+      // - gets fresh GPS
+      // - starts the continuous stream
+      // - broadcasts live position
+      // - handles 50m persistence
+      // --------------------------------------------------------
+
+      await _locationService
+          .refreshAfterResume();
+
+      if (!mounted) return;
+
+      // --------------------------------------------------------
+      // Use the latest position supplied by LocationService.
+      // --------------------------------------------------------
+
+      final position =
+          _locationService.currentPosition;
+
+      if (position != null) {
+        _updateLivePosition(
+          position,
+          moveCamera: true,
+        );
+      } else {
+        _showLocationServiceMessage();
+      }
+    } catch (error) {
+      debugPrint(
+        'MapView location refresh error: $error',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLocating = false;
+        });
+      }
+    }
+  }
+
+  // ============================================================
   // LOCATION MESSAGES
   // ============================================================
 
-  void _showLocationServiceMessage() {
+  Future<void>
+      _showLocationServiceMessage() async {
     if (!mounted) return;
+
+    final enabled =
+        await Geolocator
+            .isLocationServiceEnabled();
+
+    if (!mounted) return;
+
+    if (!enabled) {
+      ScaffoldMessenger.of(context)
+          .hideCurrentSnackBar();
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content:
+              const Text(
+            'Please enable GPS / Location Services.',
+          ),
+          action:
+              SnackBarAction(
+            label:
+                'Settings',
+            onPressed:
+                Geolocator
+                    .openLocationSettings,
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    ScaffoldMessenger.of(context)
+        .hideCurrentSnackBar();
 
     ScaffoldMessenger.of(context)
         .showSnackBar(
-      SnackBar(
-        content: const Text(
-          'Please enable GPS / Location Services.',
-        ),
-        action:
-            SnackBarAction(
-          label: 'Settings',
-          onPressed:
-              Geolocator
-                  .openLocationSettings,
-        ),
-      ),
-    );
-  }
-
-  void _showPermissionSettingsMessage() {
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context)
-        .showSnackBar(
-      SnackBar(
-        content: const Text(
-          'Location permission is permanently denied.',
-        ),
-        action:
-            SnackBarAction(
-          label: 'Settings',
-          onPressed:
-              Geolocator
-                  .openAppSettings,
+      const SnackBar(
+        content:
+            Text(
+          'Unable to get your current location.',
         ),
       ),
     );
@@ -1023,14 +1098,18 @@ class _MapViewState extends State<MapView>
           AppColors.white,
       shape:
           const CircleBorder(),
-      child: Tooltip(
+      child:
+          Tooltip(
         message:
             tooltip ?? '',
-        child: InkWell(
+        child:
+            InkWell(
           customBorder:
               const CircleBorder(),
-          onTap: onTap,
-          child: SizedBox(
+          onTap:
+              onTap,
+          child:
+              SizedBox(
             width: 38,
             height: 38,
             child:
@@ -1038,12 +1117,12 @@ class _MapViewState extends State<MapView>
               child:
                   child ??
                       Icon(
-                        icon,
-                        color:
-                            AppColors
-                                .midnightBlue,
-                        size: 20,
-                      ),
+                    icon,
+                    color:
+                        AppColors
+                            .midnightBlue,
+                    size: 20,
+                  ),
             ),
           ),
         ),
@@ -1106,11 +1185,9 @@ class _MapViewState extends State<MapView>
                           : AppColors
                               .midnightBlue,
                 ),
-
                 const SizedBox(
                   width: 12,
                 ),
-
                 Expanded(
                   child:
                       Text(
@@ -1171,17 +1248,47 @@ class _MapViewState extends State<MapView>
                 WidgetsBinding
                     .instance
                     .addPostFrameCallback(
-                  (_) {
+                  (_) async {
                     if (!mounted ||
                         !_mapCreated) {
                       return;
                     }
 
-                    if (!_hasMovedToInitialPosition) {
+                    // ------------------------------------------------
+                    // LocationService is the source of truth.
+                    // ------------------------------------------------
+
+                    final servicePosition =
+                        _locationService
+                            .currentPosition;
+
+                    if (servicePosition !=
+                        null) {
+                      _currentPosition =
+                          servicePosition;
+
+                      _hasRealLocation =
+                          _locationService
+                              .hasRealLocation;
+
                       _hasMovedToInitialPosition =
                           true;
 
-                      _moveCameraTo(
+                      await _moveCameraTo(
+                        servicePosition,
+                        zoom: 13.8,
+                      );
+                    } else if (!_hasMovedToInitialPosition) {
+                      _hasMovedToInitialPosition =
+                          true;
+
+                      // ------------------------------------------------
+                      // First launch / no persisted location.
+                      //
+                      // Preserve the existing fallback behavior.
+                      // ------------------------------------------------
+
+                      await _moveCameraTo(
                         _currentPosition,
                         zoom: 13.8,
                       );
@@ -1201,7 +1308,8 @@ class _MapViewState extends State<MapView>
                   CameraPosition(
                 target:
                     _currentPosition,
-                zoom: 13.8,
+                zoom:
+                    13.8,
               ),
 
               mapType:
@@ -1219,10 +1327,6 @@ class _MapViewState extends State<MapView>
               mapToolbarEnabled:
                   false,
 
-              // =================================================
-              // GESTURES
-              // =================================================
-
               zoomGesturesEnabled:
                   true,
 
@@ -1238,10 +1342,6 @@ class _MapViewState extends State<MapView>
               compassEnabled:
                   true,
 
-              // =================================================
-              // MAP TAP
-              // =================================================
-
               onTap:
                   _handleMapTap,
 
@@ -1250,12 +1350,6 @@ class _MapViewState extends State<MapView>
 
               markers:
                   _markers,
-
-              // =================================================
-              // FLUTTER WEB
-              //
-              // Allows mouse drag and mouse wheel interaction.
-              // =================================================
 
               gestureRecognizers:
                   <Factory<
@@ -1334,10 +1428,7 @@ class _MapViewState extends State<MapView>
                   tooltip:
                       'Recenter on my location',
                   onTap:
-                      () async {
-                    await _initLiveLocation();
-                    _recenter();
-                  },
+                      _refreshLocation,
                   child:
                       _isLocating
                           ? const SizedBox(
@@ -1352,8 +1443,9 @@ class _MapViewState extends State<MapView>
                           : const Icon(
                               Icons
                                   .my_location_rounded,
-                              color: AppColors
-                                  .primaryTealDark,
+                              color:
+                                  AppColors
+                                      .primaryTealDark,
                               size: 23,
                             ),
                 ),

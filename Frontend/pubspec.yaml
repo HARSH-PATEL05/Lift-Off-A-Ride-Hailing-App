@@ -39,7 +39,7 @@ dependencies:
   # Map & Location rendering
   google_maps_flutter: ^2.12.3
   geolocator: ^13.0.2
-
+  shared_preferences: ^2.0.0
   # Typography
   google_fonts: ^6.2.1
 

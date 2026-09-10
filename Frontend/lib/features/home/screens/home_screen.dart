@@ -1,6 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -14,6 +15,7 @@ import '../../profile/screens/profile_screen.dart';
 
 import '../../../core/data/mock_data.dart';
 import '../../../core/services/google_places_service.dart';
+import '../../../core/services/location_service.dart';
 
 /// LiftOff Main Home Screen.
 ///
@@ -24,6 +26,16 @@ import '../../../core/services/google_places_service.dart';
 ///
 /// Host mode:
 /// - RiderHostDashboard
+///
+/// Location architecture:
+/// - LocationService owns the ONE GPS stream.
+/// - HomeScreen listens to livePositionStream.
+/// - LocationService handles GPS ON/OFF.
+/// - LocationService handles 50m persistence.
+/// - LocationService handles live address resolution.
+/// - LastLocationService is used internally by LocationService.
+/// - HomeScreen does NOT create another GPS stream.
+/// - HomeScreen does NOT reverse-geocode normal live GPS updates.
 ///
 /// Platform behavior:
 /// - Web/Windows keep the existing layout.
@@ -36,7 +48,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen>
+    with WidgetsBindingObserver {
   // ============================================================
   // MODE
   // ============================================================
@@ -55,6 +68,12 @@ class _HomeScreenState extends State<HomeScreen> {
       MockData.communityRides.first.id;
 
   bool _showRideStatus = false;
+
+  // ============================================================
+  // LIVE LOCATION MARKER
+  // ============================================================
+
+  bool _showLiveLocationMarker = false;
 
   // ============================================================
   // ROUTE STATE
@@ -82,15 +101,49 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================
 
   /// Complete address internally.
+  ///
+  /// This value comes from LocationService.
   String? _liveLocationAddress;
 
   /// Short Area + City address shown in FloatingTopBar.
+  ///
+  /// This value comes from LocationService.
   String? _shortLiveLocationAddress;
 
-  bool _showLiveLocationMarker = false;
+  /// Latest live GPS position.
+  ///
+  /// This is supplied by LocationService.
+  LatLng? _currentLivePosition;
 
   // ============================================================
-  // MAP SELECTION MODE
+  // CENTRALIZED LOCATION SERVICE
+  // ============================================================
+
+  final LocationService _locationService =
+      LocationService.instance;
+
+  /// Subscription to the centralized live GPS stream.
+  StreamSubscription<LatLng>?
+      _livePositionSubscription;
+
+  /// Subscription to centralized GPS service status.
+  StreamSubscription<ServiceStatus>?
+      _serviceStatusSubscription;
+
+  /// Subscription to centralized location/address state.
+  ///
+  /// LocationService emits this whenever its important
+  /// location state changes, especially after a new address
+  /// has been resolved and persisted.
+  StreamSubscription<void>?
+      _locationStateSubscription;
+
+  /// Prevents repeated lifecycle saves during one
+  /// background transition.
+  bool _lifecycleSaveTriggered = false;
+
+  // ============================================================
+  // MAP LOCATION SELECTION
   // ============================================================
 
   MapSelectionMode? _mapSelectionMode;
@@ -103,337 +156,375 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
 
-    _initLiveLocationAddress();
+    WidgetsBinding.instance.addObserver(this);
+
+    // ----------------------------------------------------------
+    // Start centralized location service.
+    // ----------------------------------------------------------
+
+    _initializeLocation();
+
+    // ----------------------------------------------------------
+    // Listen to live location.
+    // ----------------------------------------------------------
+
+    _listenToLiveLocation();
+
+    // ----------------------------------------------------------
+    // Listen to GPS ON/OFF.
+    // ----------------------------------------------------------
+
+    _listenToServiceStatus();
+
+    // ----------------------------------------------------------
+    // Listen to address/location state changes.
+    // ----------------------------------------------------------
+
+    _listenToLocationState();
   }
 
   // ============================================================
-  // LIVE LOCATION
+  // INITIALIZE LOCATION
   // ============================================================
 
-  Future<void> _initLiveLocationAddress() async {
+  Future<void> _initializeLocation() async {
     try {
-      if (mounted) {
-        setState(() {
-          _liveLocationAddress =
-              'Getting your location...';
+      debugPrint(
+        'HomeScreen: Initializing LocationService...',
+      );
 
-          _shortLiveLocationAddress =
-              'Getting your location...';
-        });
-      }
+      await _locationService.initialize();
 
-      // ========================================================
-      // CHECK LOCATION SERVICE
-      // ========================================================
+      if (!mounted) return;
 
-      final serviceEnabled =
-          await Geolocator.isLocationServiceEnabled();
+      // --------------------------------------------------------
+      // LocationService restores:
+      // - saved coordinates
+      // - saved address
+      // - saved short address
+      //
+      // HomeScreen only reads those values.
+      // No extra Google API call is performed.
+      // --------------------------------------------------------
 
-      if (!serviceEnabled) {
-        if (!mounted) return;
+      _syncLocationDisplayFromService();
 
-        setState(() {
-          _liveLocationAddress =
-              'Location services are turned off';
+      // --------------------------------------------------------
+      // LocationService may already have the latest position.
+      // --------------------------------------------------------
 
-          _shortLiveLocationAddress =
-              'Location services are turned off';
-        });
+      final currentPosition =
+          _locationService.currentPosition;
 
-        return;
-      }
-
-      // ========================================================
-      // CHECK LOCATION PERMISSION
-      // ========================================================
-
-      var permission =
-          await Geolocator.checkPermission();
-
-      if (permission ==
-          LocationPermission.denied) {
-        permission =
-            await Geolocator.requestPermission();
-      }
-
-      if (permission ==
-          LocationPermission.deniedForever) {
-        if (!mounted) return;
-
-        setState(() {
-          _liveLocationAddress =
-              'Location permission permanently denied';
-
-          _shortLiveLocationAddress =
-              'Location permission permanently denied';
-        });
-
-        return;
-      }
-
-      if (permission ==
-          LocationPermission.denied) {
-        if (!mounted) return;
-
-        setState(() {
-          _liveLocationAddress =
-              'Location permission denied';
-
-          _shortLiveLocationAddress =
-              'Location permission denied';
-        });
-
-        return;
-      }
-
-      // ========================================================
-      // GET CURRENT GPS LOCATION
-      // ========================================================
-
-      Position position;
-
-      try {
-        position =
-            await Geolocator.getCurrentPosition(
-          locationSettings:
-              const LocationSettings(
-            accuracy:
-                LocationAccuracy.high,
-          ),
+      if (currentPosition != null) {
+        _updateLivePosition(
+          currentPosition,
         );
-      } catch (e) {
+      }
+    } catch (e) {
+      debugPrint(
+        'HomeScreen location initialization error: $e',
+      );
+    }
+  }
+
+  // ============================================================
+  // LIVE LOCATION LISTENER
+  // ============================================================
+
+  void _listenToLiveLocation() {
+    _livePositionSubscription =
+        _locationService.livePositionStream.listen(
+      (LatLng position) {
+        if (!mounted) return;
+
         debugPrint(
-          'Current location error: $e',
+          'HomeScreen LIVE LOCATION: '
+          '${position.latitude}, '
+          '${position.longitude}',
         );
 
-        final lastPosition =
-            await Geolocator.getLastKnownPosition();
+        // ------------------------------------------------------
+        // Update map/live position immediately.
+        //
+        // LocationService controls persistence separately.
+        // ------------------------------------------------------
 
-        if (lastPosition == null) {
-          if (!mounted) return;
+        _updateLivePosition(
+          position,
+        );
+      },
+      onError: (error) {
+        debugPrint(
+          'HomeScreen live location stream error: $error',
+        );
+      },
+    );
+  }
 
-          setState(() {
-            _liveLocationAddress =
-                'Unable to get current location';
+  // ============================================================
+  // GPS SERVICE STATUS LISTENER
+  // ============================================================
 
-            _shortLiveLocationAddress =
-                'Unable to get current location';
-          });
+  void _listenToServiceStatus() {
+    _serviceStatusSubscription =
+        _locationService.serviceStatusStream.listen(
+      (ServiceStatus status) {
+        if (!mounted) return;
+
+        debugPrint(
+          'HomeScreen GPS SERVICE STATUS: $status',
+        );
+
+        // ------------------------------------------------------
+        // GPS ENABLED
+        // ------------------------------------------------------
+
+        if (status == ServiceStatus.enabled) {
+          debugPrint(
+            'HomeScreen: GPS enabled. '
+            'LocationService is obtaining live location.',
+          );
+
+          ScaffoldMessenger.of(context)
+              .hideCurrentSnackBar();
+
+          // ----------------------------------------------------
+          // LocationService itself restarts GPS.
+          //
+          // We only synchronize whatever state is currently
+          // available to the UI.
+          // ----------------------------------------------------
+
+          _syncLocationDisplayFromService();
 
           return;
         }
 
-        position = lastPosition;
-      }
+        // ------------------------------------------------------
+        // GPS DISABLED
+        // ------------------------------------------------------
 
-      debugPrint(
-        'LIVE LOCATION: '
-        '${position.latitude}, '
-        '${position.longitude}',
-      );
-
-      // ========================================================
-      // GET COMPLETE GOOGLE ADDRESS
-      // ========================================================
-
-      String fullAddress = '';
-
-      try {
-        fullAddress =
-            await GooglePlacesService.instance
-                .getAddressFromCoordinates(
-          LatLng(
-            position.latitude,
-            position.longitude,
-          ),
-        );
-      } catch (e) {
-        debugPrint(
-          'Reverse geocoding error: $e',
-        );
-      }
-
-      if (!mounted) return;
-
-      // ========================================================
-      // UPDATE LOCATION
-      // ========================================================
-
-      if (fullAddress.trim().isNotEmpty) {
-        final cleanedAddress =
-            fullAddress.trim();
-
-        setState(() {
-          _liveLocationAddress =
-              cleanedAddress;
-
-          _shortLiveLocationAddress =
-              _getAreaAndCity(
-            cleanedAddress,
+        if (status == ServiceStatus.disabled) {
+          debugPrint(
+            'HomeScreen: GPS disabled. '
+            'Keeping last known location.',
           );
-        });
-      } else {
-        final coordinateText =
-            '${position.latitude.toStringAsFixed(5)}, '
-            '${position.longitude.toStringAsFixed(5)}';
 
-        setState(() {
-          _liveLocationAddress =
-              coordinateText;
+          // ----------------------------------------------------
+          // IMPORTANT:
+          //
+          // Do NOT clear:
+          // - _currentLivePosition
+          // - _liveLocationAddress
+          // - _shortLiveLocationAddress
+          //
+          // LocationService intentionally keeps the last
+          // known/saved location visible.
+          // ----------------------------------------------------
+        }
+      },
+      onError: (error) {
+        debugPrint(
+          'HomeScreen GPS service status error: $error',
+        );
+      },
+    );
+  }
 
-          _shortLiveLocationAddress =
-              'Current Location';
-        });
-      }
-    } catch (e) {
-      debugPrint(
-        'Error getting live location: $e',
-      );
+  // ============================================================
+  // LOCATION STATE LISTENER
+  // ============================================================
 
-      if (!mounted) return;
+  void _listenToLocationState() {
+    _locationStateSubscription =
+        _locationService.locationStateStream.listen(
+      (_) {
+        if (!mounted) return;
 
-      setState(() {
-        _liveLocationAddress =
-            'Unable to fetch location';
+        debugPrint(
+          'HomeScreen: Location state changed. '
+          'Synchronizing display.',
+        );
 
-        _shortLiveLocationAddress =
-            'Unable to fetch location';
-      });
+        _syncLocationDisplayFromService();
+      },
+      onError: (error) {
+        debugPrint(
+          'HomeScreen location state stream error: $error',
+        );
+      },
+    );
+  }
+
+  // ============================================================
+  // SYNC LOCATION DISPLAY
+  // ============================================================
+
+  /// Reads the latest location/address state from the
+  /// centralized LocationService.
+  ///
+  /// IMPORTANT:
+  ///
+  /// This method NEVER calls Google APIs.
+  ///
+  /// LocationService owns:
+  /// - GPS updates
+  /// - 50m persistence
+  /// - reverse geocoding
+  /// - saved location
+  /// - address cache
+  void _syncLocationDisplayFromService() {
+    if (!mounted) return;
+
+    final serviceAddress =
+        _locationService.currentAddress;
+
+    final serviceShortAddress =
+        _locationService.currentShortAddress;
+
+    final servicePosition =
+        _locationService.currentPosition;
+
+    bool changed = false;
+
+    // ----------------------------------------------------------
+    // Synchronize full address.
+    // ----------------------------------------------------------
+
+    if (serviceAddress != null &&
+        serviceAddress.trim().isNotEmpty &&
+        serviceAddress.trim() !=
+            _liveLocationAddress) {
+      _liveLocationAddress =
+          serviceAddress.trim();
+
+      changed = true;
+    }
+
+    // ----------------------------------------------------------
+    // Synchronize short address.
+    // ----------------------------------------------------------
+
+    if (serviceShortAddress != null &&
+        serviceShortAddress.trim().isNotEmpty &&
+        serviceShortAddress.trim() !=
+            _shortLiveLocationAddress) {
+      _shortLiveLocationAddress =
+          serviceShortAddress.trim();
+
+      changed = true;
+    }
+
+    // ----------------------------------------------------------
+    // Synchronize current position.
+    // ----------------------------------------------------------
+
+    if (servicePosition != null &&
+        servicePosition !=
+            _currentLivePosition) {
+      _currentLivePosition =
+          servicePosition;
+
+      changed = true;
+    }
+
+    if (changed) {
+      setState(() {});
     }
   }
 
   // ============================================================
-  // AREA + CITY FORMATTER
+  // UPDATE LIVE POSITION
   // ============================================================
 
-  String _getAreaAndCity(
-    String fullAddress,
+  void _updateLivePosition(
+    LatLng position,
   ) {
-    final address =
-        fullAddress.trim();
+    if (!mounted) return;
 
-    const systemMessages = [
-      'Getting your location...',
-      'Location services are turned off',
-      'Location permission permanently denied',
-      'Location permission denied',
-      'Unable to get current location',
-      'Unable to fetch location',
-    ];
+    setState(() {
+      _currentLivePosition =
+          position;
+    });
+  }
 
-    if (systemMessages.contains(address)) {
-      return address;
-    }
+  // ============================================================
+  // APP LIFECYCLE
+  // ============================================================
 
-    if (address
-        .toLowerCase()
-        .startsWith('location near')) {
-      return 'Current Location';
-    }
-
-    final parts =
-        address
-            .split(',')
-            .map(
-              (part) => part.trim(),
-            )
-            .where(
-              (part) => part.isNotEmpty,
-            )
-            .toList();
-
-    if (parts.isEmpty) {
-      return 'Current Location';
-    }
-
-    // ----------------------------------------------------------
-    // Remove country.
-    // ----------------------------------------------------------
-
-    final filteredParts =
-        parts.where((part) {
-      final lower =
-          part.toLowerCase();
-
-      return lower != 'india';
-    }).toList();
-
-    if (filteredParts.isEmpty) {
-      return 'Current Location';
-    }
-
-    // ----------------------------------------------------------
-    // Remove state / PIN from end.
-    // ----------------------------------------------------------
-
-    final locationParts =
-        List<String>.from(
-      filteredParts,
+  @override
+  void didChangeAppLifecycleState(
+    AppLifecycleState state,
+  ) {
+    debugPrint(
+      'HomeScreen APP LIFECYCLE: $state',
     );
 
-    final indianStates = [
-      'andhra pradesh',
-      'arunachal pradesh',
-      'assam',
-      'bihar',
-      'chhattisgarh',
-      'goa',
-      'gujarat',
-      'haryana',
-      'himachal pradesh',
-      'jharkhand',
-      'karnataka',
-      'kerala',
-      'madhya pradesh',
-      'maharashtra',
-      'manipur',
-      'meghalaya',
-      'mizoram',
-      'nagaland',
-      'odisha',
-      'punjab',
-      'rajasthan',
-      'sikkim',
-      'tamil nadu',
-      'telangana',
-      'tripura',
-      'uttar pradesh',
-      'uttarakhand',
-      'west bengal',
-      'delhi',
-    ];
+    // ----------------------------------------------------------
+    // APP RETURNED TO FOREGROUND
+    // ----------------------------------------------------------
 
-    while (locationParts.isNotEmpty) {
-      final last =
-          locationParts.last;
+    if (state == AppLifecycleState.resumed) {
+      _lifecycleSaveTriggered = false;
 
-      final lower =
-          last.toLowerCase();
-
-      final hasPinCode =
-          RegExp(
-        r'\b\d{6}\b',
-      ).hasMatch(last);
-
-      final isState =
-          indianStates.any(
-        (state) =>
-            lower.contains(state),
+      debugPrint(
+        'HomeScreen: App resumed. '
+        'Refreshing LocationService...',
       );
 
-      if (hasPinCode || isState) {
-        locationParts.removeLast();
-      } else {
-        break;
+      unawaited(
+        _locationService.refreshAfterResume(),
+      );
+
+      return;
+    }
+
+    // ----------------------------------------------------------
+    // APP IS NOW HIDDEN / PAUSED
+    // ----------------------------------------------------------
+    //
+    // Do NOT use inactive here.
+    //
+    // Android may enter inactive during temporary UI events
+    // such as keyboard/dialog transitions.
+    // ----------------------------------------------------------
+
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused) {
+      if (_lifecycleSaveTriggered) {
+        debugPrint(
+          'HomeScreen: Lifecycle save already triggered.',
+        );
+
+        return;
       }
-    }
 
-    if (locationParts.length >= 2) {
-      return '${locationParts[locationParts.length - 2]}, '
-          '${locationParts.last}';
-    }
+      _lifecycleSaveTriggered = true;
 
-    return locationParts.first;
+      unawaited(
+        _saveCurrentLocationOnLifecycle(),
+      );
+    }
+  }
+
+  // ============================================================
+  // LIFECYCLE LOCATION SAVE
+  // ============================================================
+
+  Future<void> _saveCurrentLocationOnLifecycle() async {
+    try {
+      await _locationService
+          .saveCurrentLocationOnLifecycle();
+
+      debugPrint(
+        'HomeScreen: Lifecycle location save requested.',
+      );
+    } catch (e) {
+      debugPrint(
+        'HomeScreen lifecycle location save error: $e',
+      );
+    }
   }
 
   // ============================================================
@@ -480,23 +571,21 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onModeChanged(
     bool isHost,
   ) {
-    // Already in requested mode.
     if (_isHostMode == isHost) {
       return;
     }
 
-    // Close keyboard before changing mode.
-    FocusManager.instance.primaryFocus?.unfocus();
+    FocusManager.instance
+        .primaryFocus
+        ?.unfocus();
 
     setState(() {
       _isHostMode = isHost;
 
-      // Host mode does not use map fullscreen.
       if (isHost) {
         _isMapFullscreen = false;
       }
 
-      // Clear map-selection mode when changing mode.
       _mapSelectionMode = null;
     });
   }
@@ -521,7 +610,8 @@ class _HomeScreenState extends State<HomeScreen> {
     String serviceId,
   ) {
     setState(() {
-      _selectedServiceId = serviceId;
+      _selectedServiceId =
+          serviceId;
     });
   }
 
@@ -555,23 +645,31 @@ class _HomeScreenState extends State<HomeScreen> {
         ++_routeRequestId;
 
     setState(() {
-      _routeSource = source;
+      _routeSource =
+          source;
 
-      _routeDestination = destination;
+      _routeDestination =
+          destination;
 
-      _sourceAddress = sourceName;
+      _sourceAddress =
+          sourceName;
 
-      _destinationAddress = destinationName;
+      _destinationAddress =
+          destinationName;
 
       _routeCoordinates = [];
 
-      _routeDistance = null;
+      _routeDistance =
+          null;
 
-      _routeDuration = null;
+      _routeDuration =
+          null;
 
-      _isSearchingRoute = true;
+      _isSearchingRoute =
+          true;
 
-      _showLiveLocationMarker = false;
+      _showLiveLocationMarker =
+          false;
     });
 
     try {
@@ -598,7 +696,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _routeDuration =
             routeResult.durationText;
 
-        _isSearchingRoute = false;
+        _isSearchingRoute =
+            false;
       });
     } catch (e) {
       debugPrint(
@@ -614,11 +713,14 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _routeCoordinates = [];
 
-        _routeDistance = null;
+        _routeDistance =
+            null;
 
-        _routeDuration = null;
+        _routeDuration =
+            null;
 
-        _isSearchingRoute = false;
+        _isSearchingRoute =
+            false;
       });
 
       ScaffoldMessenger.of(context)
@@ -637,7 +739,9 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================
 
   void _onSelectSourceFromMap() {
-    FocusManager.instance.primaryFocus?.unfocus();
+    FocusManager.instance
+        .primaryFocus
+        ?.unfocus();
 
     setState(() {
       _mapSelectionMode =
@@ -657,7 +761,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onSelectDestinationFromMap() {
-    FocusManager.instance.primaryFocus?.unfocus();
+    FocusManager.instance
+        .primaryFocus
+        ?.unfocus();
 
     setState(() {
       _mapSelectionMode =
@@ -687,22 +793,34 @@ class _HomeScreenState extends State<HomeScreen> {
         ++_routeRequestId;
 
     setState(() {
-      _routeSource = position;
+      _routeSource =
+          position;
 
       _routeCoordinates = [];
 
-      _routeDistance = null;
+      _routeDistance =
+          null;
 
-      _routeDuration = null;
+      _routeDuration =
+          null;
 
-      _mapSelectionMode = null;
+      _mapSelectionMode =
+          null;
 
-      _showLiveLocationMarker = false;
+      _showLiveLocationMarker =
+          false;
     });
 
     String address;
 
     try {
+      // --------------------------------------------------------
+      // Intentional reverse geocoding.
+      //
+      // This is an explicit user-selected map point.
+      // It is NOT a normal live GPS update.
+      // --------------------------------------------------------
+
       address =
           await GooglePlacesService.instance
               .getAddressFromCoordinates(
@@ -724,7 +842,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
-      _sourceAddress = address;
+      _sourceAddress =
+          address;
     });
 
     if (_routeSource != null &&
@@ -751,22 +870,33 @@ class _HomeScreenState extends State<HomeScreen> {
         ++_routeRequestId;
 
     setState(() {
-      _routeDestination = position;
+      _routeDestination =
+          position;
 
       _routeCoordinates = [];
 
-      _routeDistance = null;
+      _routeDistance =
+          null;
 
-      _routeDuration = null;
+      _routeDuration =
+          null;
 
-      _mapSelectionMode = null;
+      _mapSelectionMode =
+          null;
 
-      _showLiveLocationMarker = false;
+      _showLiveLocationMarker =
+          false;
     });
 
     String address;
 
     try {
+      // --------------------------------------------------------
+      // Intentional reverse geocoding.
+      //
+      // This is an explicit user-selected map point.
+      // --------------------------------------------------------
+
       address =
           await GooglePlacesService.instance
               .getAddressFromCoordinates(
@@ -788,7 +918,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
-      _destinationAddress = address;
+      _destinationAddress =
+          address;
     });
 
     if (_routeSource != null &&
@@ -802,6 +933,37 @@ class _HomeScreenState extends State<HomeScreen> {
             'Selected Destination',
       );
     }
+  }
+
+  // ============================================================
+  // DISPOSE
+  // ============================================================
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance
+        .removeObserver(this);
+
+    // ----------------------------------------------------------
+    // IMPORTANT:
+    //
+    // Cancel ONLY HomeScreen's subscriptions.
+    //
+    // DO NOT dispose LocationService here.
+    //
+    // LocationService is a singleton shared with MapView.
+    // ----------------------------------------------------------
+
+    _livePositionSubscription
+        ?.cancel();
+
+    _serviceStatusSubscription
+        ?.cancel();
+
+    _locationStateSubscription
+        ?.cancel();
+
+    super.dispose();
   }
 
   // ============================================================
@@ -841,13 +1003,6 @@ class _HomeScreenState extends State<HomeScreen> {
     // ==========================================================
     // MAP HEIGHT
     // ==========================================================
-    //
-    // IMPORTANT:
-    //
-    // The map keeps its normal height.
-    //
-    // The keyboard does NOT resize the map.
-    // ==========================================================
 
     final mapHeight =
         (screenHeight * 0.60).clamp(
@@ -858,27 +1013,11 @@ class _HomeScreenState extends State<HomeScreen> {
     const sheetOverlap = 60.0;
 
     final normalBookingTop =
-        mapHeight - sheetOverlap;
+        mapHeight -
+            sheetOverlap;
 
     // ==========================================================
     // BOOKING PANEL HEIGHT
-    // ==========================================================
-    //
-    // This is the key fix.
-    //
-    // Previously:
-    //
-    // Positioned(
-    //   top: normalBookingTop,
-    //   bottom: 0,
-    // )
-    //
-    // followed by Transform.translate().
-    //
-    // That moved the visual panel but its original layout
-    // rectangle remained in place, producing the white gap.
-    //
-    // Now the panel is ACTUALLY repositioned.
     // ==========================================================
 
     final bookingPanelHeight =
@@ -888,16 +1027,6 @@ class _HomeScreenState extends State<HomeScreen> {
     // ==========================================================
     // BOOKING PANEL BOTTOM
     // ==========================================================
-    //
-    // Normal:
-    // bottom = 0
-    //
-    // Keyboard:
-    // bottom = keyboardHeight
-    //
-    // Therefore the COMPLETE panel sits directly above
-    // the keyboard.
-    // ==========================================================
 
     final bookingPanelBottom =
         isKeyboardOpen
@@ -905,17 +1034,6 @@ class _HomeScreenState extends State<HomeScreen> {
             : 0.0;
 
     return Scaffold(
-      // ========================================================
-      // KEYBOARD RESIZE
-      // ========================================================
-      //
-      // Android:
-      // We manually position the booking panel.
-      //
-      // Web / Windows:
-      // Keep the original Flutter behavior.
-      // ========================================================
-
       resizeToAvoidBottomInset:
           !isAndroid,
 
@@ -990,24 +1108,21 @@ class _HomeScreenState extends State<HomeScreen> {
           // ======================================================
           // TRAVELLER BOOKING PANEL
           // ======================================================
-          //
-          // IMPORTANT:
-          //
-          // We do NOT use Transform.translate anymore.
-          //
-          // The entire panel is physically repositioned using:
-          //
-          //   bottom: keyboardHeight
-          //   height: bookingPanelHeight
-          //
-          // This removes the white empty layout area.
-          // ======================================================
 
           if (!_isHostMode &&
               !_isMapFullscreen)
             Positioned(
               left: 0,
               right: 0,
+
+              // ------------------------------------------------
+              // ANDROID KEYBOARD FIX
+              //
+              // The COMPLETE booking panel moves above the
+              // keyboard using actual Stack layout positioning.
+              //
+              // No Transform.translate is used.
+              // ------------------------------------------------
 
               bottom:
                   bookingPanelBottom,
@@ -1059,15 +1174,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // ======================================================
           // FLOATING TOP BAR
-          // ======================================================
-          //
-          // FloatingTopBar already contains SafeArea.
-          //
-          // Android:
-          // top = 0
-          //
-          // Web / Windows:
-          // preserve existing top positioning.
           // ======================================================
 
           if (!_isMapFullscreen)
