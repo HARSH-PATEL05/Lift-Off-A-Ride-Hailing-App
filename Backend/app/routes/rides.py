@@ -1,49 +1,480 @@
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
+
 from app.db.models.aadhar_document import Aadhaar
 from app.db.models.driving_licence import DrivingLicence
-from app.db.models.vehicle_rc import VehicleRC
-from app.db.models.ride import Ride
-from app.db.models.user import User
 from app.db.models.host_stat import HostStat
-from app.db.schemas.ride import RideCancelResponse, RideCreateRequest, RideResponse
+from app.db.models.ride import Ride
+from app.db.models.ride_route_leg import RideRouteLeg
+from app.db.models.ride_stop import RideStop
+from app.db.models.user import User
+from app.db.models.user_vehicle import UserVehicle
+from app.db.models.vehicle import Vehicle
+from app.db.models.vehicle_rc import VehicleRC
+
+from app.db.schemas.ride import (
+    RideCancelResponse,
+    RideCreateRequest,
+    RideResponse,
+    RideRouteLegResponse,
+    RideStopResponse,
+)
+
 from app.dependencies.auth import get_current_user
 
-router = APIRouter(prefix="/rides", tags=["Rides"])
+from app.services.geo_service import (
+    api_points_from_geometry,
+    line_from_api_points,
+)
+
+from app.services.fare_service import (
+    FareInput,
+    calculate_fare_per_seat,
+)
+
+
+router = APIRouter(
+    prefix="/rides",
+    tags=["Rides"],
+)
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-def _build_response(ride: Ride, host: User | None) -> RideResponse:
-    """Map ORM Ride + User objects → RideResponse schema."""
+
+def _build_response(
+    ride: Ride,
+    host: User | None,
+) -> RideResponse:
+    """
+    Map ORM Ride + related objects into RideResponse.
+
+    PostGIS geometry is converted back into the API's normal
+    latitude/longitude representation so Flutter does not need
+    to know anything about PostGIS.
+    """
+
+    stops = [
+        RideStopResponse(
+            id=stop.id,
+            ride_id=stop.ride_id,
+            stop_order=stop.stop_order,
+            stop_name=stop.stop_name,
+            stop_lat=stop.stop_lat,
+            stop_lng=stop.stop_lng,
+        )
+        for stop in ride.stops
+    ]
+
+    route_legs = [
+        RideRouteLegResponse(
+            id=leg.id,
+            ride_id=leg.ride_id,
+            leg_order=leg.leg_order,
+            start_name=leg.start_name,
+            start_lat=leg.start_lat,
+            start_lng=leg.start_lng,
+            end_name=leg.end_name,
+            end_lat=leg.end_lat,
+            end_lng=leg.end_lng,
+            distance_meters=leg.distance_meters,
+            duration_seconds=leg.duration_seconds,
+            geometry=api_points_from_geometry(
+                leg.geometry
+            ),
+        )
+        for leg in ride.route_legs
+    ]
+
     return RideResponse(
         ride_id=ride.id,
-        host_id=ride.host_id,
+
+        host_id=(
+            host.supabase_user_id
+            if host
+            else str(ride.host_user_id)
+        ),
+
         host_name=host.full_name if host else None,
         host_avatar=host.avatar_url if host else None,
+
         origin_name=ride.origin_name,
         origin_lat=ride.origin_lat,
         origin_lng=ride.origin_lng,
+
         destination_name=ride.destination_name,
         destination_lat=ride.destination_lat,
         destination_lng=ride.destination_lng,
+
         departure_time=ride.departure_time,
+        ride_now=ride.ride_now,
+
         available_seats=ride.available_seats,
-        fare_per_seat=ride.fare_per_seat,
-        vehicle_model=ride.vehicle_model,
-        vehicle_number=ride.vehicle_number,
+
+        vehicle_id=ride.vehicle_id,
+
+        fare_per_seat=Decimal(
+            str(ride.fare_per_seat)
+        ),
+
+        route_distance_meters=ride.route_distance_meters,
+        route_duration_seconds=ride.route_duration_seconds,
+
+        route_geometry=api_points_from_geometry(
+            ride.route_geometry
+        ),
+
+        stops=stops,
+        route_legs=route_legs,
+
         is_women_only=ride.is_women_only,
         democratic_consent=ride.democratic_consent,
+
+        flexible_pickup=ride.flexible_pickup,
+        allow_luggage=ride.allow_luggage,
+        allow_pets=ride.allow_pets,
+        allow_music=ride.allow_music,
+        is_ac=ride.is_ac,
+
+        additional_notes=ride.additional_notes,
+
+        terms_accepted=ride.terms_accepted,
+
         status=ride.status,
+
         created_at=ride.created_at,
+        updated_at=ride.updated_at,
     )
 
 
-# ─── POST /rides — Publish a commute route ────────────────────────────────────
+def _get_current_db_user(
+    current_user,
+    db: Session,
+) -> User:
+    """
+    Resolve the authenticated Supabase user to the local users row.
+    """
+
+    db_user = (
+        db.query(User)
+        .filter(
+            User.supabase_user_id == current_user.id
+        )
+        .first()
+    )
+
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "User profile not found. "
+                "Please sync your account first."
+            ),
+        )
+
+    return db_user
+
+
+def _validate_verified_host(
+    db_user: User,
+    db: Session,
+) -> None:
+    """
+    Verify the host's required identity documents.
+
+    Current LiftOff ride-publishing rule:
+
+        Aadhaar + Driving Licence + Vehicle RC
+
+    Vehicle RC is validated separately against the selected
+    vehicle by _get_verified_host_vehicle().
+    """
+
+    aadhaar = (
+        db.query(Aadhaar)
+        .filter(
+            Aadhaar.user_id == db_user.id
+        )
+        .first()
+    )
+
+    dl = (
+        db.query(DrivingLicence)
+        .filter(
+            DrivingLicence.user_id == db_user.id
+        )
+        .first()
+    )
+
+    is_aadhaar_ok = (
+        aadhaar is not None
+        and aadhaar.aadhaar_verified
+    )
+
+    is_dl_ok = (
+        dl is not None
+        and dl.dl_verified
+    )
+
+    if not is_aadhaar_ok or not is_dl_ok:
+        unverified_docs = []
+
+        if not is_aadhaar_ok:
+            unverified_docs.append("Aadhaar")
+
+        if not is_dl_ok:
+            unverified_docs.append("Driving Licence")
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Required identity documents must be verified "
+                "before offering rides. Pending: "
+                f"{', '.join(unverified_docs)}."
+            ),
+        )
+
+
+def _get_verified_host_vehicle(
+    db_user: User,
+    vehicle_id: int,
+    db: Session,
+) -> Vehicle:
+    """
+    Resolve and validate the vehicle selected in Module 3.
+
+    Conditions:
+      1. Vehicle exists.
+      2. Vehicle belongs to this host through UserVehicle.
+      3. UserVehicle association is active.
+      4. Vehicle has a verified RC.
+    """
+
+    user_vehicle = (
+        db.query(UserVehicle)
+        .filter(
+            UserVehicle.user_id == db_user.id,
+            UserVehicle.vehicle_id == vehicle_id,
+            UserVehicle.is_active.is_(True),
+        )
+        .first()
+    )
+
+    if not user_vehicle:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "The selected vehicle does not belong to your "
+                "active verified vehicles."
+            ),
+        )
+
+    vehicle = (
+        db.query(Vehicle)
+        .filter(
+            Vehicle.id == vehicle_id
+        )
+        .first()
+    )
+
+    if not vehicle:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Selected vehicle was not found.",
+        )
+
+    vehicle_rc = (
+        db.query(VehicleRC)
+        .filter(
+            VehicleRC.vehicle_id == vehicle.id,
+            VehicleRC.rc_verified.is_(True),
+        )
+        .first()
+    )
+
+    if not vehicle_rc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "The selected vehicle does not have a verified "
+                "Vehicle RC."
+            ),
+        )
+
+    return vehicle
+
+
+def _validate_route_payload(
+    payload: RideCreateRequest,
+) -> None:
+    """
+    Validate consistency of the route snapshot supplied by
+    Modules 1 and 2.
+    """
+
+    if len(payload.route_geometry) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Selected route must contain at least "
+                "two geometry points."
+            ),
+        )
+
+    if not payload.route_legs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one route leg is required.",
+        )
+
+    expected_leg_order = 1
+
+    for leg in payload.route_legs:
+
+        if leg.leg_order != expected_leg_order:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Route legs must have sequential "
+                    "leg_order values."
+                ),
+            )
+
+        if len(leg.geometry) < 2:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Route leg {leg.leg_order} must contain "
+                    "at least two geometry points."
+                ),
+            )
+
+        expected_leg_order += 1
+
+    expected_stop_order = 1
+
+    for stop in payload.stops:
+
+        if stop.stop_order != expected_stop_order:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Stops must have sequential "
+                    "stop_order values."
+                ),
+            )
+
+        expected_stop_order += 1
+
+
+def _calculate_ride_fare(
+    payload: RideCreateRequest,
+    vehicle: Vehicle,
+    departure_time: datetime,
+) -> Decimal:
+    """
+    Calculate fare entirely on the backend.
+
+    All finalized FareInput fields are supplied here.
+
+    At ride publication:
+      - passenger_count = 0
+      - requested_seats = 0
+
+    These booking-context values are populated later by the
+    passenger booking/matching workflow.
+    """
+
+    fare_input = FareInput(
+        # ─────────────────────────────────────────
+        # Route
+        # ─────────────────────────────────────────
+
+        distance_meters=payload.route_distance_meters,
+        duration_seconds=payload.route_duration_seconds,
+
+        number_of_stops=len(payload.stops),
+        number_of_legs=len(payload.route_legs),
+
+        # ─────────────────────────────────────────
+        # Timing
+        # ─────────────────────────────────────────
+
+        departure_time=departure_time,
+        ride_now=payload.ride_now,
+
+        # ─────────────────────────────────────────
+        # Vehicle
+        # ─────────────────────────────────────────
+
+        vehicle_category=vehicle.vehicle_category,
+        vehicle_subtype=vehicle.vehicle_subtype,
+        vehicle_type_specified=vehicle.vehicle_type_specified,
+
+        seating_capacity=vehicle.seating_capacity,
+        available_seats=payload.available_seats,
+
+        # ─────────────────────────────────────────
+        # Ride Preferences
+        # ─────────────────────────────────────────
+
+        is_ac=payload.is_ac,
+        flexible_pickup=payload.flexible_pickup,
+        allow_luggage=payload.allow_luggage,
+        allow_pets=payload.allow_pets,
+        allow_music=payload.allow_music,
+        is_women_only=payload.is_women_only,
+
+        # ─────────────────────────────────────────
+        # Passenger / Booking
+        # ─────────────────────────────────────────
+        #
+        # A newly published ride has no passengers
+        # and no passenger seat request yet.
+
+        passenger_count=0,
+        requested_seats=0,
+
+        # ─────────────────────────────────────────
+        # Booking Context
+        # ─────────────────────────────────────────
+
+        booking_time=None,
+    )
+
+    try:
+        fare = calculate_fare_per_seat(
+            fare_input
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Fare calculation failed: {exc}",
+        ) from exc
+
+    if fare < Decimal("0"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Backend fare calculation returned "
+                "an invalid value."
+            ),
+        )
+
+    return fare.quantize(
+        Decimal("0.01")
+    )
+
+
+# ─── POST /rides — Publish a commute route ──────────────────────────────────
+
 
 @router.post(
     "",
@@ -57,83 +488,297 @@ def create_ride(
     db: Session = Depends(get_db),
 ) -> RideResponse:
     """
-    A verified host publishes a commute route.
+    Publish a confirmed commute route.
 
-    Gate: user must have Aadhaar verified.
-    (DL + RC not required yet — relaxed during MVP so testing is easy.)
+    Module 1:
+      - source
+      - stops
+      - destination
+      - route
+      - departure time
+
+    Module 2:
+      - final route selection
+
+    Module 3:
+      - verified vehicle
+      - passenger seat count
+      - ride preferences
+      - terms acceptance
+
+    Backend:
+      - validates host
+      - validates vehicle
+      - validates seats
+      - validates schedule
+      - converts route geometry to PostGIS
+      - calculates fare
+      - stores the complete ride snapshot
     """
 
-    # Fetch local DB User using Supabase User UUID
-    db_user = (
-        db.query(User)
-        .filter(User.supabase_user_id == current_user.id)
-        .first()
+    # ── Resolve local user ───────────────────────────────────────
+
+    db_user = _get_current_db_user(
+        current_user,
+        db,
     )
 
-    if not db_user:
+    # ── Identity verification ───────────────────────────────────
+
+    _validate_verified_host(
+        db_user,
+        db,
+    )
+
+    # ── Terms ────────────────────────────────────────────────────
+
+    if not payload.terms_accepted:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User profile not found. Please sync your account first.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must accept the ride publishing terms.",
         )
 
-    # ── Verification gate: All 3 documents required ──
-    aadhaar = db.query(Aadhaar).filter(Aadhaar.user_id == db_user.id).first()
-    dl = db.query(DrivingLicence).filter(DrivingLicence.user_id == db_user.id).first()
-    rc = db.query(VehicleRC).filter(VehicleRC.user_id == db_user.id).first()
+    # ── Schedule validation ──────────────────────────────────────
 
-    is_aadhaar_ok = aadhaar is not None and aadhaar.aadhaar_verified
-    is_dl_ok = dl is not None and dl.dl_verified
-    is_rc_ok = rc is not None and rc.rc_verified
+    now = datetime.now(timezone.utc)
 
-    if not (is_aadhaar_ok and is_dl_ok and is_rc_ok):
-        unverified_docs = []
-        if not is_aadhaar_ok: unverified_docs.append("Aadhaar")
-        if not is_dl_ok: unverified_docs.append("Driving Licence")
-        if not is_rc_ok: unverified_docs.append("Vehicle RC")
+    departure_time = payload.departure_time
 
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"All 3 documents must be verified to offer rides. Pending: {', '.join(unverified_docs)}.",
+    if departure_time.tzinfo is None:
+        departure_time = departure_time.replace(
+            tzinfo=timezone.utc
+        )
+    else:
+        departure_time = departure_time.astimezone(
+            timezone.utc
         )
 
-    # ── Create ride row ──
+    if payload.ride_now:
+
+        # Ride Now intentionally uses server time.
+        departure_time = now
+
+    else:
+
+        # Preserve the exact scheduled departure selected
+        # in Module 1.
+
+        if departure_time <= now:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Scheduled departure time must be "
+                    "in the future."
+                ),
+            )
+
+    # ── Vehicle validation ──────────────────────────────────────
+
+    vehicle = _get_verified_host_vehicle(
+        db_user,
+        payload.vehicle_id,
+        db,
+    )
+
+    # ── Seat capacity validation ────────────────────────────────
+    #
+    # Maximum LiftOff passenger seats:
+    #
+    #     seating_capacity - 1
+    #
+    # One seat is reserved for the host.
+
+    max_available_seats = (
+        vehicle.seating_capacity - 1
+    )
+
+    if max_available_seats < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "This vehicle does not have enough seating "
+                "capacity to offer a passenger seat."
+            ),
+        )
+
+    if payload.available_seats > max_available_seats:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"This vehicle allows a maximum of "
+                f"{max_available_seats} passenger seat(s) "
+                "on LiftOff."
+            ),
+        )
+
+    # ── Route validation ─────────────────────────────────────────
+
+    _validate_route_payload(
+        payload
+    )
+
+    # ── Convert complete route to PostGIS ────────────────────────
+
+    try:
+        route_geometry = line_from_api_points(
+            payload.route_geometry
+        )
+
+        route_leg_geometries = {
+            leg.leg_order: line_from_api_points(
+                leg.geometry
+            )
+            for leg in payload.route_legs
+        }
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid route geometry: {exc}",
+        ) from exc
+
+    # ── Backend fare calculation ─────────────────────────────────
+    #
+    # Flutter never supplies fare.
+
+    fare_per_seat = _calculate_ride_fare(
+        payload,
+        vehicle,
+        departure_time,
+    )
+
+    # ── Create Ride ──────────────────────────────────────────────
+
     ride = Ride(
-        host_id=db_user.supabase_user_id,
-        origin_name=payload.origin_name,
+        host_user_id=db_user.id,
+
+        origin_name=payload.origin_name.strip(),
         origin_lat=payload.origin_lat,
         origin_lng=payload.origin_lng,
-        destination_name=payload.destination_name,
+
+        destination_name=payload.destination_name.strip(),
         destination_lat=payload.destination_lat,
         destination_lng=payload.destination_lng,
-        departure_time=payload.departure_time,
+
+        # Exact validated UTC departure instant.
+        departure_time=departure_time,
+        ride_now=payload.ride_now,
+
         available_seats=payload.available_seats,
-        fare_per_seat=payload.fare_per_seat,
-        vehicle_model=payload.vehicle_model,
-        vehicle_number=payload.vehicle_number,
+
+        vehicle_id=vehicle.id,
+
+        # Backend-generated fare.
+        fare_per_seat=fare_per_seat,
+
+        route_distance_meters=payload.route_distance_meters,
+        route_duration_seconds=payload.route_duration_seconds,
+
+        # PostGIS LINESTRING.
+        route_geometry=route_geometry,
+
         is_women_only=payload.is_women_only,
         democratic_consent=payload.democratic_consent,
+
+        flexible_pickup=payload.flexible_pickup,
+        allow_luggage=payload.allow_luggage,
+        allow_pets=payload.allow_pets,
+        allow_music=payload.allow_music,
+        is_ac=payload.is_ac,
+
+        additional_notes=payload.additional_notes.strip(),
+
+        terms_accepted=payload.terms_accepted,
+
         status="active",
     )
 
     db.add(ride)
 
-    # ── Update Host Stats ──
-    host_stat = db.query(HostStat).filter(HostStat.user_id == db_user.id).first()
+    # Flush so ride.id becomes available for child rows.
+    db.flush()
+
+    # ── Create Ride Stops ────────────────────────────────────────
+
+    for stop_data in payload.stops:
+
+        stop = RideStop(
+            ride_id=ride.id,
+            stop_order=stop_data.stop_order,
+            stop_name=stop_data.stop_name.strip(),
+            stop_lat=stop_data.stop_lat,
+            stop_lng=stop_data.stop_lng,
+        )
+
+        db.add(stop)
+
+    # ── Create Route Legs ────────────────────────────────────────
+
+    for leg_data in payload.route_legs:
+
+        route_leg = RideRouteLeg(
+            ride_id=ride.id,
+            leg_order=leg_data.leg_order,
+
+            start_name=leg_data.start_name.strip(),
+            start_lat=leg_data.start_lat,
+            start_lng=leg_data.start_lng,
+
+            end_name=leg_data.end_name.strip(),
+            end_lat=leg_data.end_lat,
+            end_lng=leg_data.end_lng,
+
+            distance_meters=leg_data.distance_meters,
+            duration_seconds=leg_data.duration_seconds,
+
+            geometry=route_leg_geometries[
+                leg_data.leg_order
+            ],
+        )
+
+        db.add(route_leg)
+
+    # ── Update Host Stats ────────────────────────────────────────
+
+    host_stat = (
+        db.query(HostStat)
+        .filter(
+            HostStat.user_id == db_user.id
+        )
+        .first()
+    )
+
     if host_stat is None:
-        host_stat = HostStat(user_id=db_user.id)
+        host_stat = HostStat(
+            user_id=db_user.id,
+        )
         db.add(host_stat)
 
     host_stat.shared_commutes_count += 1
-    host_stat.fuel_recovered_inr += payload.fare_per_seat * payload.available_seats
     host_stat.co2_saved_kg += 4.2
 
-    db.commit()
+    # Fare/payment is handled by the payment workflow.
+    # Do not modify fuel_recovered_inr here.
+
+    # ── Commit entire transaction ────────────────────────────────
+
+    try:
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
+
     db.refresh(ride)
 
-    return _build_response(ride, db_user)
+    return _build_response(
+        ride,
+        db_user,
+    )
 
 
-# ─── GET /rides — Browse all active rides (passenger view) ───────────────────
+# ─── GET /rides — Browse all active rides ────────────────────────────────────
+
 
 @router.get(
     "",
@@ -145,30 +790,47 @@ def list_rides(
     db: Session = Depends(get_db),
 ) -> List[RideResponse]:
     """
-    Returns all rides with status='active', posted by any host.
-    Future: filter by proximity to passenger origin/destination.
+    Returns all currently active rides.
+
+    Future matching logic can filter these rides using
+    PostGIS route geometry, route legs and stops.
     """
 
     rides = (
         db.query(Ride)
-        .filter(Ride.status == "active")
-        .order_by(Ride.departure_time.asc())
+        .filter(
+            Ride.status == "active"
+        )
+        .order_by(
+            Ride.departure_time.asc()
+        )
         .all()
     )
 
     result = []
+
     for ride in rides:
+
         host = (
             db.query(User)
-            .filter(User.supabase_user_id == ride.host_id)
+            .filter(
+                User.id == ride.host_user_id
+            )
             .first()
         )
-        result.append(_build_response(ride, host))
+
+        result.append(
+            _build_response(
+                ride,
+                host,
+            )
+        )
 
     return result
 
 
-# ─── GET /rides/my — Rides posted by the current host ────────────────────────
+# ─── GET /rides/my — Rides posted by current host ────────────────────────────
+
 
 @router.get(
     "/my",
@@ -179,28 +841,37 @@ def list_my_rides(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> List[RideResponse]:
-    """Returns all rides (any status) that this host has posted."""
+    """
+    Returns all rides posted by the current host.
+    """
 
-    db_user = (
-        db.query(User)
-        .filter(User.supabase_user_id == current_user.id)
-        .first()
+    db_user = _get_current_db_user(
+        current_user,
+        db,
     )
-
-    if not db_user:
-        return []
 
     rides = (
         db.query(Ride)
-        .filter(Ride.host_id == db_user.supabase_user_id)
-        .order_by(Ride.created_at.desc())
+        .filter(
+            Ride.host_user_id == db_user.id
+        )
+        .order_by(
+            Ride.created_at.desc()
+        )
         .all()
     )
 
-    return [_build_response(ride, db_user) for ride in rides]
+    return [
+        _build_response(
+            ride,
+            db_user,
+        )
+        for ride in rides
+    ]
 
 
-# ─── PATCH /rides/{ride_id}/cancel — Cancel a ride ───────────────────────────
+# ─── PATCH /rides/{ride_id}/cancel ───────────────────────────────────────────
+
 
 @router.patch(
     "/{ride_id}/cancel",
@@ -212,9 +883,24 @@ def cancel_ride(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RideCancelResponse:
-    """Soft-cancel: sets status to 'cancelled'. Only the posting host can cancel."""
+    """
+    Soft-cancel a ride.
 
-    ride = db.query(Ride).filter(Ride.id == ride_id).first()
+    Only the host who created the ride can cancel it.
+    """
+
+    db_user = _get_current_db_user(
+        current_user,
+        db,
+    )
+
+    ride = (
+        db.query(Ride)
+        .filter(
+            Ride.id == ride_id
+        )
+        .first()
+    )
 
     if not ride:
         raise HTTPException(
@@ -222,7 +908,7 @@ def cancel_ride(
             detail=f"Ride {ride_id} not found.",
         )
 
-    if ride.host_id != current_user.id:
+    if ride.host_user_id != db_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only cancel your own rides.",
@@ -231,10 +917,14 @@ def cancel_ride(
     if ride.status != "active":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Ride is already '{ride.status}' and cannot be cancelled.",
+            detail=(
+                f"Ride is already '{ride.status}' "
+                "and cannot be cancelled."
+            ),
         )
 
     ride.status = "cancelled"
+
     db.commit()
 
     return RideCancelResponse(
@@ -242,4 +932,3 @@ def cancel_ride(
         status="cancelled",
         message="Ride successfully cancelled.",
     )
-

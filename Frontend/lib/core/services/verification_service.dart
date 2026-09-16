@@ -83,27 +83,114 @@ class VerificationService {
     }
   }
 
-  // ─── Vehicle RC Verification ───
+    // ─── Vehicle RC Verification ───
 
-  Future<UserProfile> verifyVehicleRc(String rcNumber) async {
-    final clean = rcNumber.trim();
-    if (clean.length < 5) {
-      throw const ValidationException(message: 'Please enter a valid Vehicle RC number.');
+  Future<UserProfile> verifyVehicleRc({
+    required String rcNumber,
+    required String vehicleModel,
+    String? vehicleColor,
+    required String vehicleCategory,
+    required String vehicleSubtype,
+    String? vehicleTypeSpecified,
+    required int seatingCapacity,
+  }) async {
+    final cleanRc = rcNumber
+        .trim()
+        .toUpperCase()
+        .replaceAll(RegExp(r'\s+'), '');
+
+    final cleanModel = vehicleModel.trim();
+    final cleanColor = vehicleColor?.trim();
+
+    final cleanCategory = vehicleCategory.trim();
+    final cleanSubtype = vehicleSubtype.trim();
+    final cleanSpecified = vehicleTypeSpecified?.trim();
+
+    // ─── Client-side validation ───
+
+    if (cleanRc.length < 5 || cleanRc.length > 20) {
+      throw const ValidationException(
+        message: 'Please enter a valid Vehicle RC number.',
+      );
+    }
+
+    if (cleanModel.length < 2) {
+      throw const ValidationException(
+        message: 'Please enter the vehicle make and model.',
+      );
+    }
+
+    if (cleanColor != null &&
+        cleanColor.isNotEmpty &&
+        cleanColor.length > 50) {
+      throw const ValidationException(
+        message: 'Vehicle color is too long.',
+      );
+    }
+
+    if (cleanCategory.isEmpty) {
+      throw const ValidationException(
+        message: 'Please select a vehicle category.',
+      );
+    }
+
+    if (cleanSubtype.isEmpty) {
+      throw const ValidationException(
+        message: 'Please select a vehicle type.',
+      );
+    }
+
+    if (cleanSpecified != null && cleanSpecified.length > 100) {
+      throw const ValidationException(
+        message: 'Vehicle type specification is too long.',
+      );
+    }
+
+    if ((cleanCategory.toUpperCase() == 'OTHER' ||
+            cleanSubtype.toUpperCase() == 'OTHER') &&
+        (cleanSpecified == null || cleanSpecified.isEmpty)) {
+      throw const ValidationException(
+        message: 'Please specify the vehicle type.',
+      );
+    }
+
+    if (seatingCapacity < 2 || seatingCapacity > 100) {
+      throw const ValidationException(
+        message: 'Seating capacity must be between 2 and 100.',
+      );
     }
 
     final response = await _apiClient.post(
       ApiEndpoints.verifyRC,
-      body: {'rc_number': clean},
+      body: {
+        'rc_number': cleanRc,
+        'vehicle_model': cleanModel,
+        'vehicle_color':
+            cleanColor == null || cleanColor.isEmpty ? null : cleanColor,
+        'vehicle_category': cleanCategory,
+        'vehicle_subtype': cleanSubtype,
+        'vehicle_type_specified':
+            cleanSpecified == null || cleanSpecified.isEmpty
+                ? null
+                : cleanSpecified,
+        'seating_capacity': seatingCapacity,
+      },
     );
 
     final data = response as Map<String, dynamic>;
+
     if (data['verified'] == true) {
-      return await AuthService.instance.syncWithBackend();
-    } else {
-      throw ApiException(
-        message: data['message']?.toString() ?? 'Vehicle RC verification failed.',
-        statusCode: 200,
+      debugPrint(
+        'VerificationService: Vehicle RC verified successfully '
+        '(capacity=$seatingCapacity, max LiftOff seats=${seatingCapacity - 1})',
       );
+
+      return await AuthService.instance.syncWithBackend();
     }
-  }
-}
+
+    throw ApiException(
+      message: data['message']?.toString() ??
+          'Vehicle RC verification failed. Please check the details and try again.',
+      statusCode: 200,
+    );
+  }}

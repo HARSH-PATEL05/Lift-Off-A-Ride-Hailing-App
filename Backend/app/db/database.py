@@ -1,7 +1,15 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+
 from app.core.config import DATABASE_URL
 
+
+# Validate database configuration
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not configured")
+
+
+# Database engine
 engine = create_engine(DATABASE_URL)
 
 
@@ -23,6 +31,5 @@ def get_db():
 
     try:
         yield db
-
     finally:
         db.close()

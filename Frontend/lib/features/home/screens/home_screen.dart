@@ -8,6 +8,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../widgets/floating_top_bar.dart';
 import '../widgets/map_view.dart';
 import '../widgets/booking_bottom_sheet.dart';
+import '../widgets/search_bar_widget.dart';
 
 import '../../ride/widgets/live_ride_drawer.dart';
 import '../../host/screens/rider_host_dashboard.dart';
@@ -87,6 +88,9 @@ class _HomeScreenState extends State<HomeScreen>
 
   List<LatLng> _routeCoordinates = [];
 
+  /// Intermediate route stops selected by the traveller.
+  List<SearchRouteStop> _routeStops = [];
+
   String? _routeDistance;
   String? _routeDuration;
 
@@ -122,6 +126,11 @@ class _HomeScreenState extends State<HomeScreen>
   final LocationService _locationService =
       LocationService.instance;
 
+  /// Controller used by HomeScreen to tell MapView
+  /// to move the camera to the latest live location.
+  final MapViewController _mapViewController =
+      MapViewController();
+
   /// Subscription to the centralized live GPS stream.
   StreamSubscription<LatLng>?
       _livePositionSubscription;
@@ -147,6 +156,7 @@ class _HomeScreenState extends State<HomeScreen>
   // ============================================================
 
   MapSelectionMode? _mapSelectionMode;
+  int? _mapStopIndex;
 
   // ============================================================
   // INIT
@@ -531,24 +541,33 @@ class _HomeScreenState extends State<HomeScreen>
   // LIVE LOCATION TAP
   // ============================================================
 
+  /// Called when the user taps anywhere on the
+  /// "Your Live Location" card.
+  ///
+  /// The map is moved to the latest live GPS position.
   void _onLiveLocationTap() {
+    if (_currentLivePosition == null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Your live location is not available yet.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    // Make sure the live location marker is visible.
     setState(() {
       _showLiveLocationMarker = true;
     });
 
-    ScaffoldMessenger.of(context)
-        .showSnackBar(
-      SnackBar(
-        content: Text(
-          _liveLocationAddress != null
-              ? 'Showing live location: '
-                  '$_liveLocationAddress'
-              : 'Showing your current live location',
-        ),
-        duration:
-            const Duration(seconds: 2),
-      ),
-    );
+    // Tell MapView to move the Google Maps camera
+    // to the latest live position.
+    _mapViewController
+        .recenterToLiveLocation();
   }
 
   // ============================================================
@@ -587,6 +606,7 @@ class _HomeScreenState extends State<HomeScreen>
       }
 
       _mapSelectionMode = null;
+      _mapStopIndex = null;
     });
   }
 
@@ -640,98 +660,97 @@ class _HomeScreenState extends State<HomeScreen>
     LatLng destination,
     String sourceName,
     String destinationName,
+    List<SearchRouteStop> stops,
   ) async {
-    final requestId =
-        ++_routeRequestId;
+    final requestId = ++_routeRequestId;
 
     setState(() {
-      _routeSource =
-          source;
-
-      _routeDestination =
-          destination;
-
-      _sourceAddress =
-          sourceName;
-
-      _destinationAddress =
-          destinationName;
-
+      _routeSource = source;
+      _routeDestination = destination;
+      _sourceAddress = sourceName;
+      _destinationAddress = destinationName;
+      _routeStops = List<SearchRouteStop>.from(stops);
       _routeCoordinates = [];
-
-      _routeDistance =
-          null;
-
-      _routeDuration =
-          null;
-
-      _isSearchingRoute =
-          true;
-
-      _showLiveLocationMarker =
-          false;
+      _routeDistance = null;
+      _routeDuration = null;
+      _isSearchingRoute = true;
+      _showLiveLocationMarker = false;
     });
 
     try {
-      final routeResult =
-          await GooglePlacesService.instance
-              .getDirections(
-        source,
-        destination,
-      );
+      // Calculate each road segment independently so intermediate stops
+      // follow real roads rather than being joined by straight lines.
+      final waypoints = <LatLng>[source, ...stops.map((s) => s.position), destination];
+      final allPoints = <LatLng>[];
+      num totalDistanceMeters = 0;
+      num totalDurationSeconds = 0;
 
-      if (!mounted ||
-          requestId !=
-              _routeRequestId) {
-        return;
+      for (var i = 0; i < waypoints.length - 1; i++) {
+        final route = await GooglePlacesService.instance.getDirections(
+          waypoints[i],
+          waypoints[i + 1],
+        );
+
+        if (route.points.isNotEmpty) {
+          if (allPoints.isEmpty) {
+            allPoints.addAll(route.points);
+          } else {
+            allPoints.addAll(route.points.skip(1));
+          }
+        }
+        totalDistanceMeters += route.distanceMeters;
+        totalDurationSeconds += route.durationSeconds;
       }
+
+      if (!mounted || requestId != _routeRequestId) return;
 
       setState(() {
-        _routeCoordinates =
-            routeResult.points;
+        _routeCoordinates = allPoints;
+        _routeDistance = _formatRouteDistance(totalDistanceMeters);
+        _routeDuration = _formatRouteDuration(totalDurationSeconds);
+        _isSearchingRoute = false;
+      });
 
-        _routeDistance =
-            routeResult.distanceText;
-
-        _routeDuration =
-            routeResult.durationText;
-
-        _isSearchingRoute =
-            false;
+      // The search action owns the camera movement: once the detailed
+      // route is ready, fit the complete road route in the map.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || requestId != _routeRequestId) return;
+        _mapViewController.focusOnRoute([
+          source,
+          ...stops.map((s) => s.position),
+          ...allPoints,
+          destination,
+        ]);
       });
     } catch (e) {
-      debugPrint(
-        'Error getting route directions: $e',
-      );
-
-      if (!mounted ||
-          requestId !=
-              _routeRequestId) {
-        return;
-      }
+      debugPrint('Error getting detailed route directions: $e');
+      if (!mounted || requestId != _routeRequestId) return;
 
       setState(() {
         _routeCoordinates = [];
-
-        _routeDistance =
-            null;
-
-        _routeDuration =
-            null;
-
-        _isSearchingRoute =
-            false;
+        _routeDistance = null;
+        _routeDuration = null;
+        _isSearchingRoute = false;
       });
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Unable to find a road route for these locations.',
-          ),
-        ),
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to find a road route for these locations.')),
       );
     }
+  }
+
+  String _formatRouteDistance(num meters) {
+    final value = meters.toDouble();
+    if (value >= 1000) return '${(value / 1000).toStringAsFixed(value >= 10000 ? 0 : 1)} km';
+    return '${value.round()} m';
+  }
+
+  String _formatRouteDuration(num seconds) {
+    final totalMinutes = (seconds.toDouble() / 60).round();
+    if (totalMinutes < 60) return '$totalMinutes min';
+    final hours = totalMinutes ~/ 60;
+    final minutes = totalMinutes % 60;
+    return minutes == 0 ? '$hours hr' : '$hours hr $minutes min';
   }
 
   // ============================================================
@@ -744,8 +763,9 @@ class _HomeScreenState extends State<HomeScreen>
         ?.unfocus();
 
     setState(() {
-      _mapSelectionMode =
-          MapSelectionMode.source;
+      _mapSelectionMode = MapSelectionMode.source;
+      _mapStopIndex = null;
+      _isMapFullscreen = true;
     });
 
     ScaffoldMessenger.of(context)
@@ -766,8 +786,9 @@ class _HomeScreenState extends State<HomeScreen>
         ?.unfocus();
 
     setState(() {
-      _mapSelectionMode =
-          MapSelectionMode.destination;
+      _mapSelectionMode = MapSelectionMode.destination;
+      _mapStopIndex = null;
+      _isMapFullscreen = true;
     });
 
     ScaffoldMessenger.of(context)
@@ -780,6 +801,73 @@ class _HomeScreenState extends State<HomeScreen>
             Duration(seconds: 3),
       ),
     );
+  }
+
+  void _onSelectStopFromMap(int index) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      _mapSelectionMode = MapSelectionMode.stop;
+      _mapStopIndex = index;
+      _isMapFullscreen = true;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Tap anywhere on the map to set Stop ${index + 1}'), duration: const Duration(seconds: 3)),
+    );
+  }
+
+  // ============================================================
+  // STOP SELECTED FROM MAP
+  // ============================================================
+
+  Future<void> _onStopSelectedFromMap(
+    LatLng position,
+    int index,
+  ) async {
+    final selectionRequestId = ++_routeRequestId;
+
+    if (index < 0) return;
+
+    setState(() {
+      while (_routeStops.length <= index) {
+        _routeStops.add(
+          SearchRouteStop(
+            name: 'Stop ${_routeStops.length + 1}',
+            position: position,
+          ),
+        );
+      }
+
+      _routeStops[index] = SearchRouteStop(
+        name: _routeStops[index].name,
+        position: position,
+      );
+
+      _routeCoordinates = [];
+      _routeDistance = null;
+      _routeDuration = null;
+      _mapSelectionMode = null;
+      _mapStopIndex = null;
+      _isMapFullscreen = false;
+      _showLiveLocationMarker = false;
+    });
+
+    String address;
+    try {
+      address = await GooglePlacesService.instance
+          .getAddressFromCoordinates(position);
+    } catch (e) {
+      debugPrint('Error reverse geocoding stop: $e');
+      address = 'Selected Stop ${index + 1}';
+    }
+
+    if (!mounted || selectionRequestId != _routeRequestId) return;
+
+    setState(() {
+      _routeStops[index] = SearchRouteStop(
+        name: address,
+        position: position,
+      );
+    });
   }
 
   // ============================================================
@@ -806,6 +894,9 @@ class _HomeScreenState extends State<HomeScreen>
 
       _mapSelectionMode =
           null;
+
+      _isMapFullscreen =
+          false;
 
       _showLiveLocationMarker =
           false;
@@ -851,10 +942,9 @@ class _HomeScreenState extends State<HomeScreen>
       await _onRouteSearch(
         _routeSource!,
         _routeDestination!,
-        _sourceAddress ??
-            'Selected Pickup Location',
-        _destinationAddress ??
-            'Selected Destination',
+        _sourceAddress ?? 'Selected Pickup Location',
+        _destinationAddress ?? 'Selected Destination',
+        _routeStops,
       );
     }
   }
@@ -883,6 +973,9 @@ class _HomeScreenState extends State<HomeScreen>
 
       _mapSelectionMode =
           null;
+
+      _isMapFullscreen =
+          false;
 
       _showLiveLocationMarker =
           false;
@@ -927,10 +1020,9 @@ class _HomeScreenState extends State<HomeScreen>
       await _onRouteSearch(
         _routeSource!,
         _routeDestination!,
-        _sourceAddress ??
-            'Selected Pickup Location',
-        _destinationAddress ??
-            'Selected Destination',
+        _sourceAddress ?? 'Selected Pickup Location',
+        _destinationAddress ?? 'Selected Destination',
+        _routeStops,
       );
     }
   }
@@ -1076,6 +1168,12 @@ class _HomeScreenState extends State<HomeScreen>
 
               child:
                   MapView(
+                // ------------------------------------------------
+                // Allows HomeScreen to control the map camera.
+                // ------------------------------------------------
+                controller:
+                    _mapViewController,
+
                 isFullscreen:
                     _isMapFullscreen,
 
@@ -1088,6 +1186,9 @@ class _HomeScreenState extends State<HomeScreen>
                 destination:
                     _routeDestination,
 
+                stops:
+                    _routeStops,
+
                 routeCoordinates:
                     _routeCoordinates,
 
@@ -1097,11 +1198,17 @@ class _HomeScreenState extends State<HomeScreen>
                 selectionMode:
                     _mapSelectionMode,
 
+                stopSelectionIndex:
+                    _mapStopIndex,
+
                 onSourceSelectedFromMap:
                     _onSourceSelectedFromMap,
 
                 onDestinationSelectedFromMap:
                     _onDestinationSelectedFromMap,
+
+                onStopSelectedFromMap:
+                    _onStopSelectedFromMap,
               ),
             ),
 
@@ -1130,8 +1237,11 @@ class _HomeScreenState extends State<HomeScreen>
               height:
                   bookingPanelHeight,
 
-              child:
-                  _showRideStatus
+              // Do not let the booking sheet consume map taps while
+              // the user is explicitly choosing a location on the map.
+              child: IgnorePointer(
+                ignoring: _mapSelectionMode != null,
+                child: _showRideStatus
                       ? LiveRideDrawer(
                           onClose:
                               _onCloseRideStatus,
@@ -1152,6 +1262,9 @@ class _HomeScreenState extends State<HomeScreen>
                           initialDestination:
                               _destinationAddress,
 
+                          initialStops:
+                              _routeStops,
+
                           isSearchingRoute:
                               _isSearchingRoute,
 
@@ -1167,9 +1280,13 @@ class _HomeScreenState extends State<HomeScreen>
                           onSelectDestinationFromMap:
                               _onSelectDestinationFromMap,
 
+                          onSelectStopFromMap:
+                              _onSelectStopFromMap,
+
                           onRouteSearch:
                               _onRouteSearch,
                         ),
+                ),
             ),
 
           // ======================================================

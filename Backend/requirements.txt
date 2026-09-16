@@ -6,3 +6,5 @@ psycopg
 python-dotenv
 supabase
 cryptography
+GeoAlchemy2
+Shapely

@@ -30,6 +30,26 @@ class ApiEndpoints {
   static const String verifyAadhaar = '/verification/aadhaar';
   static const String verifyDL = '/verification/driving-licence';
   static const String verifyRC = '/verification/vehicle-rc';
+  
+  // ─── Vehicles ───
+
+  /// GET: Get all vehicles belonging to the
+  /// authenticated user.
+  static const String vehicles = '/vehicles';
+
+  /// GET: Get one vehicle belonging to the
+  /// authenticated user.
+  static String vehicle(int vehicleId) =>
+      '/vehicles/$vehicleId';
+
+  /// PATCH: Update vehicle model/color.
+  static String updateVehicle(int vehicleId) =>
+      '/vehicles/$vehicleId';
+
+  /// PATCH: Activate/deactivate user's vehicle.
+  static String vehicleStatus(int vehicleId) =>
+      '/vehicles/$vehicleId/status';
+
 
   // ─── Rides ───
   /// POST: Publish a new commute route.

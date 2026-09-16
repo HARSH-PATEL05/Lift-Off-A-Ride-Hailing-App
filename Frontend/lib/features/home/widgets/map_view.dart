@@ -10,11 +10,33 @@ import 'package:geolocator/geolocator.dart';
 import '../../../core/data/mock_data.dart';
 import '../../../core/services/location_service.dart';
 import '../../../core/theme/app_colors.dart';
+import 'search_bar_widget.dart';
 
 /// Identifies which location is currently being selected from the map.
 enum MapSelectionMode {
   source,
+  stop,
   destination,
+}
+
+/// Controller used by HomeScreen to control the map.
+class MapViewController {
+  VoidCallback? _recenterToLiveLocation;
+  void Function(List<LatLng> points)? _focusOnRoute;
+  List<LatLng>? _pendingRouteFocus;
+
+  void focusOnRoute(List<LatLng> points) {
+    if (points.length < 2) return;
+    if (_focusOnRoute != null) {
+      _focusOnRoute!.call(points);
+    } else {
+      _pendingRouteFocus = List<LatLng>.from(points);
+    }
+  }
+
+  void recenterToLiveLocation() {
+    _recenterToLiveLocation?.call();
+  }
 }
 
 /// Interactive Live Map View.
@@ -51,12 +73,18 @@ enum MapSelectionMode {
 /// - Normal / Satellite toggle
 /// - Fullscreen toggle
 class MapView extends StatefulWidget {
+  /// Controller used to control the map from HomeScreen.
+  final MapViewController? controller;
+
   final bool isFullscreen;
 
   final ValueChanged<bool>? onFullscreenChanged;
 
   final LatLng? source;
   final LatLng? destination;
+
+  /// Intermediate stops displayed on the route.
+  final List<SearchRouteStop> stops;
 
   /// Actual road route coordinates.
   final List<LatLng>? routeCoordinates;
@@ -66,19 +94,25 @@ class MapView extends StatefulWidget {
   final MapSelectionMode? selectionMode;
 
   final ValueChanged<LatLng>? onSourceSelectedFromMap;
+  final int? stopSelectionIndex;
   final ValueChanged<LatLng>? onDestinationSelectedFromMap;
+  final void Function(LatLng position, int index)? onStopSelectedFromMap;
 
   const MapView({
     super.key,
+    this.controller,
     this.isFullscreen = false,
     this.onFullscreenChanged,
     this.source,
     this.destination,
+    this.stops = const [],
     this.routeCoordinates,
     this.showLiveLocationMarker = false,
     this.selectionMode,
     this.onSourceSelectedFromMap,
+    this.stopSelectionIndex,
     this.onDestinationSelectedFromMap,
+    this.onStopSelectedFromMap,
   });
 
   @override
@@ -147,6 +181,21 @@ class _MapViewState extends State<MapView>
     super.initState();
 
     // ----------------------------------------------------------
+    // Connect HomeScreen's map controller to this MapView.
+    // ----------------------------------------------------------
+
+    widget.controller?._recenterToLiveLocation =
+        recenterToLiveLocation;
+    widget.controller?._focusOnRoute = focusOnRoute;
+    final pending = widget.controller?._pendingRouteFocus;
+    if (pending != null) {
+      widget.controller?._pendingRouteFocus = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) focusOnRoute(pending);
+      });
+    }
+
+    // ----------------------------------------------------------
     // Determine the initial map position.
     //
     // LocationService has already loaded the persisted location
@@ -184,6 +233,23 @@ class _MapViewState extends State<MapView>
     // ----------------------------------------------------------
 
     _initCustomMarkers();
+  }
+
+  @override
+  void didUpdateWidget(covariant MapView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final routeChanged = oldWidget.source != widget.source ||
+        oldWidget.destination != widget.destination ||
+        oldWidget.routeCoordinates != widget.routeCoordinates ||
+        oldWidget.stops != widget.stops;
+
+    // HomeScreen explicitly controls route camera focus after a route
+    // request completes. Do not start a second camera animation here;
+    // two competing fit animations made the Web map jump/break visually.
+    if (routeChanged) {
+      // Intentionally no automatic camera animation.
+    }
   }
 
   // ============================================================
@@ -232,6 +298,13 @@ class _MapViewState extends State<MapView>
 
     _livePositionSubscription
         ?.cancel();
+
+    // ----------------------------------------------------------
+    // Disconnect the controller from this MapView.
+    // ----------------------------------------------------------
+
+    widget.controller?._recenterToLiveLocation = null;
+    widget.controller?._focusOnRoute = null;
 
     _mapController = null;
 
@@ -501,6 +574,38 @@ class _MapViewState extends State<MapView>
   }
 
   // ============================================================
+  // FOCUS ON SEARCHED ROUTE
+  // ============================================================
+
+  Future<void> focusOnRoute(List<LatLng> points) async {
+    final safePoints = _safeRoutePoints(points);
+    if (safePoints.length < 2) return;
+    if (!_mapCreated || _mapController == null) {
+      return;
+    }
+    await _fitPointsInView(safePoints);
+  }
+
+  // ============================================================
+  // RECENTER TO LIVE LOCATION
+  // ============================================================
+
+  /// Moves the Google Maps camera to the latest live position.
+  ///
+  /// This is called when the user taps the Live Location
+  /// card in FloatingTopBar.
+  void recenterToLiveLocation() {
+    if (!_mapCreated) {
+      return;
+    }
+
+    _moveCameraTo(
+      _currentPosition,
+      zoom: 15,
+    );
+  }
+
+  // ============================================================
   // CAMERA
   // ============================================================
 
@@ -539,78 +644,39 @@ class _MapViewState extends State<MapView>
   // ============================================================
 
   Future<void> _fitRouteInView() async {
-    final controller =
-        _mapController;
+    final points = <LatLng>[];
+    if (widget.source != null) points.add(widget.source!);
+    points.addAll(widget.stops.map((s) => s.position));
+    points.addAll(
+      _safeRoutePoints(
+        widget.routeCoordinates ?? const <LatLng>[],
+      ),
+    );
+    if (widget.destination != null) points.add(widget.destination!);
+    if (points.length > 1) await _fitPointsInView(points);
+  }
 
-    if (!_mapCreated ||
-        controller == null) {
-      return;
-    }
+  Future<void> _fitPointsInView(List<LatLng> points) async {
+    final controller = _mapController;
+    if (!_mapCreated || controller == null || points.length < 2) return;
 
-    final source =
-        widget.source;
-
-    final destination =
-        widget.destination;
-
-    if (source == null ||
-        destination == null) {
-      return;
-    }
-
-    final points =
-        <LatLng>[
-      source,
-      ...?widget.routeCoordinates,
-      destination,
-    ];
-
-    double minLat =
-        points.first.latitude;
-
-    double maxLat =
-        points.first.latitude;
-
-    double minLng =
-        points.first.longitude;
-
-    double maxLng =
-        points.first.longitude;
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
 
     for (final point in points) {
-      if (point.latitude <
-          minLat) {
-        minLat =
-            point.latitude;
-      }
-
-      if (point.latitude >
-          maxLat) {
-        maxLat =
-            point.latitude;
-      }
-
-      if (point.longitude <
-          minLng) {
-        minLng =
-            point.longitude;
-      }
-
-      if (point.longitude >
-          maxLng) {
-        maxLng =
-            point.longitude;
-      }
+      minLat = point.latitude < minLat ? point.latitude : minLat;
+      maxLat = point.latitude > maxLat ? point.latitude : maxLat;
+      minLng = point.longitude < minLng ? point.longitude : minLng;
+      maxLng = point.longitude > maxLng ? point.longitude : maxLng;
     }
 
-    if ((maxLat - minLat).abs() <
-        0.0001) {
+    if ((maxLat - minLat).abs() < 0.0001) {
       maxLat += 0.0005;
       minLat -= 0.0005;
     }
-
-    if ((maxLng - minLng).abs() <
-        0.0001) {
+    if ((maxLng - minLng).abs() < 0.0001) {
       maxLng += 0.0005;
       minLng -= 0.0005;
     }
@@ -619,24 +685,14 @@ class _MapViewState extends State<MapView>
       await controller.animateCamera(
         CameraUpdate.newLatLngBounds(
           LatLngBounds(
-            southwest:
-                LatLng(
-              minLat,
-              minLng,
-            ),
-            northeast:
-                LatLng(
-              maxLat,
-              maxLng,
-            ),
+            southwest: LatLng(minLat, minLng),
+            northeast: LatLng(maxLat, maxLng),
           ),
           70,
         ),
       );
     } catch (error) {
-      debugPrint(
-        'Route fitting error: $error',
-      );
+      debugPrint('Route fitting error: $error');
     }
   }
 
@@ -663,12 +719,62 @@ class _MapViewState extends State<MapView>
       return;
     }
 
-    if (mode ==
-        MapSelectionMode.destination) {
-      widget
-          .onDestinationSelectedFromMap
-          ?.call(position);
+    if (mode == MapSelectionMode.stop) {
+      final index = widget.stopSelectionIndex ?? -1;
+      if (index >= 0) {
+        widget.onStopSelectedFromMap?.call(position, index);
+      }
+      return;
     }
+
+    if (mode == MapSelectionMode.destination) {
+      widget.onDestinationSelectedFromMap?.call(position);
+    }
+  }
+
+  // ============================================================
+  // POLYLINE SAFETY
+  // ============================================================
+
+  /// Google occasionally returns a malformed/outlier geometry on Web.
+  /// A single impossible jump can make GoogleMap draw a huge straight
+  /// line across the screen and can also make camera bounds unusable.
+  /// Keep only plausible consecutive road points.
+  List<LatLng> _safeRoutePoints(List<LatLng> input) {
+    if (input.length < 2) return const <LatLng>[];
+
+    final output = <LatLng>[];
+    LatLng? previous;
+
+    for (final point in input) {
+      if (point.latitude.isNaN || point.latitude.isInfinite ||
+          point.longitude.isNaN || point.longitude.isInfinite ||
+          point.latitude < -90 || point.latitude > 90 ||
+          point.longitude < -180 || point.longitude > 180) {
+        continue;
+      }
+
+      if (previous != null) {
+        final jumpMeters = Geolocator.distanceBetween(
+          previous.latitude,
+          previous.longitude,
+          point.latitude,
+          point.longitude,
+        );
+
+        // A decoded road polyline should never jump tens of kilometres
+        // between adjacent points. Drop the bad point instead of drawing
+        // a giant diagonal line.
+        if (jumpMeters > 25000) {
+          continue;
+        }
+      }
+
+      output.add(point);
+      previous = point;
+    }
+
+    return output.length >= 2 ? output : const <LatLng>[];
   }
 
   // ============================================================
@@ -733,7 +839,11 @@ class _MapViewState extends State<MapView>
                 .length >
             1) {
       final points =
-          widget.routeCoordinates!;
+          _safeRoutePoints(widget.routeCoordinates!);
+
+      if (points.length < 2) {
+        return polylines;
+      }
 
       polylines.add(
         Polyline(
@@ -769,9 +879,7 @@ class _MapViewState extends State<MapView>
               points,
           width: 5,
           color:
-              const Color(
-            0xFF00897B,
-          ),
+              const Color(0xFF1A73E8),
           startCap:
               Cap.roundCap,
           endCap:
@@ -895,6 +1003,22 @@ class _MapViewState extends State<MapView>
             title:
                 'Pickup Location',
           ),
+        ),
+      );
+    }
+
+    // ==========================================================
+    // INTERMEDIATE STOPS
+    // ==========================================================
+
+    for (var i = 0; i < widget.stops.length; i++) {
+      final stop = widget.stops[i];
+      markers.add(
+        Marker(
+          markerId: MarkerId('route_stop_$i'),
+          position: stop.position,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+          infoWindow: InfoWindow(title: 'Stop ${i + 1}', snippet: stop.name),
         ),
       );
     }
@@ -1145,6 +1269,10 @@ class _MapViewState extends State<MapView>
     final isSource =
         mode ==
             MapSelectionMode.source;
+    final isStop =
+        mode ==
+            MapSelectionMode.stop;
+    final stopIndex = widget.stopSelectionIndex ?? 0;
 
     return Positioned(
       top: 20,
@@ -1174,10 +1302,10 @@ class _MapViewState extends State<MapView>
               children: [
                 Icon(
                   isSource
-                      ? Icons
-                          .trip_origin_rounded
-                      : Icons
-                          .location_on_rounded,
+                      ? Icons.trip_origin_rounded
+                      : isStop
+                          ? Icons.add_location_alt_rounded
+                          : Icons.location_on_rounded,
                   color:
                       isSource
                           ? AppColors
@@ -1193,7 +1321,9 @@ class _MapViewState extends State<MapView>
                       Text(
                     isSource
                         ? 'Tap anywhere on the map to select your pickup location'
-                        : 'Tap anywhere on the map to select your destination',
+                        : isStop
+                            ? 'Tap anywhere on the map to select Stop ${stopIndex + 1}'
+                            : 'Tap anywhere on the map to select your destination',
                     style:
                         const TextStyle(
                       fontWeight:

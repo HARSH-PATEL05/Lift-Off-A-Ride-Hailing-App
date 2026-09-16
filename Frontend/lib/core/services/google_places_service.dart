@@ -42,27 +42,11 @@ class RouteResult {
 
 /// ------------------------------------------------------------
 /// LOCATION ADDRESS MODEL
-///
-/// Used for reverse geocoding.
-///
-/// fullAddress:
-///   Complete Google Maps address.
-///
-/// area:
-///   Local area / neighborhood.
-///
-/// city:
-///   City name.
-///
-/// areaAndCity:
-///   Used in the top header.
 /// ------------------------------------------------------------
 
 class LocationAddress {
   final String fullAddress;
-
   final String area;
-
   final String city;
 
   const LocationAddress({
@@ -71,15 +55,9 @@ class LocationAddress {
     required this.city,
   });
 
-  /// Example:
-  ///
-  /// Amanaka, Raipur
   String get areaAndCity {
-    if (area.isNotEmpty &&
-        city.isNotEmpty) {
-      // Avoid duplicate text.
-      if (area.toLowerCase() ==
-          city.toLowerCase()) {
+    if (area.isNotEmpty && city.isNotEmpty) {
+      if (area.toLowerCase() == city.toLowerCase()) {
         return city;
       }
 
@@ -131,18 +109,13 @@ class GooglePlacesService {
       ),
       headers: {
         'Content-Type': 'application/json',
-
-        'X-Goog-Api-Key':
-            _apiKey,
-
+        'X-Goog-Api-Key': _apiKey,
         'X-Goog-FieldMask':
             'suggestions.placePrediction.placeId,'
             'suggestions.placePrediction.text.text',
       },
       body: jsonEncode({
-        'input':
-            input.trim(),
-
+        'input': input.trim(),
         'includedRegionCodes': [
           'IN',
         ],
@@ -158,18 +131,14 @@ class GooglePlacesService {
     }
 
     final data =
-        jsonDecode(response.body)
-            as Map<String, dynamic>;
+        jsonDecode(response.body) as Map<String, dynamic>;
 
     final suggestions =
-        data['suggestions']
-            as List<dynamic>? ??
-            [];
+        data['suggestions'] as List<dynamic>? ?? [];
 
     return suggestions
         .where(
-          (item) =>
-              item['placePrediction'] != null,
+          (item) => item['placePrediction'] != null,
         )
         .map(
           (item) {
@@ -183,13 +152,9 @@ class GooglePlacesService {
 
             return PlaceSuggestion(
               placeId:
-                  prediction['placeId']
-                      as String,
-
+                  prediction['placeId'] as String,
               description:
-                  text?['text']
-                      as String? ??
-                      '',
+                  text?['text'] as String? ?? '',
             );
           },
         )
@@ -205,15 +170,11 @@ class GooglePlacesService {
   ) async {
     final response = await http.get(
       Uri.parse(
-        'https://places.googleapis.com/v1/places/'
-        '$placeId',
+        'https://places.googleapis.com/v1/places/$placeId',
       ),
       headers: {
-        'X-Goog-Api-Key':
-            _apiKey,
-
-        'X-Goog-FieldMask':
-            'location',
+        'X-Goog-Api-Key': _apiKey,
+        'X-Goog-FieldMask': 'location',
       },
     );
 
@@ -226,25 +187,770 @@ class GooglePlacesService {
     }
 
     final data =
-        jsonDecode(response.body)
-            as Map<String, dynamic>;
+        jsonDecode(response.body) as Map<String, dynamic>;
 
     final location =
-        data['location']
-            as Map<String, dynamic>;
+        data['location'] as Map<String, dynamic>;
 
     final lat =
-        (location['latitude'] as num)
-            .toDouble();
+        (location['latitude'] as num).toDouble();
 
     final lng =
-        (location['longitude'] as num)
-            .toDouble();
+        (location['longitude'] as num).toDouble();
 
     return LatLng(
       lat,
       lng,
     );
+  }
+
+  // ============================================================
+  // GET MULTIPLE POSSIBLE ROAD ROUTES
+  //
+  // Returns up to three distinct routes.
+  // ============================================================
+
+  Future<List<RouteResult>> getAlternativeDirections(
+    LatLng origin,
+    LatLng destination,
+  ) async {
+    // ----------------------------------------------------------
+    // 1. GOOGLE LEGACY DIRECTIONS API
+    // ----------------------------------------------------------
+
+    final legacyRoutes =
+        await _getLegacyAlternativeRoutes(
+      origin,
+      destination,
+    );
+
+    if (legacyRoutes.length > 1) {
+      return legacyRoutes.take(3).toList();
+    }
+
+    // ----------------------------------------------------------
+    // 2. GOOGLE ROUTES API V2
+    // ----------------------------------------------------------
+
+    final routesApiResults =
+        await _getRoutesApiAlternatives(
+      origin,
+      destination,
+    );
+
+    if (routesApiResults.length > 1) {
+      return routesApiResults.take(3).toList();
+    }
+
+    // If Routes API gives one valid route, use it.
+    if (routesApiResults.isNotEmpty) {
+      return routesApiResults;
+    }
+
+    // Otherwise use legacy route.
+    if (legacyRoutes.isNotEmpty) {
+      return legacyRoutes;
+    }
+
+    // ----------------------------------------------------------
+    // 3. SINGLE-ROUTE FALLBACK
+    // ----------------------------------------------------------
+
+    final fallbackRoute =
+        await getDirections(
+      origin,
+      destination,
+    );
+
+    return [
+      fallbackRoute,
+    ];
+  }
+
+  // ============================================================
+  // LEGACY GOOGLE DIRECTIONS — ALTERNATIVE ROUTES
+  // ============================================================
+
+  Future<List<RouteResult>>
+      _getLegacyAlternativeRoutes(
+    LatLng origin,
+    LatLng destination,
+  ) async {
+    // Keep existing Web behavior.
+    if (kIsWeb) {
+      return [];
+    }
+
+    try {
+      final googleUrl = Uri.parse(
+        'https://maps.googleapis.com/maps/api/'
+        'directions/json'
+        '?origin=${origin.latitude},${origin.longitude}'
+        '&destination=${destination.latitude},${destination.longitude}'
+        '&mode=driving'
+        '&alternatives=true'
+        '&key=$_apiKey',
+      );
+
+      debugPrint(
+        'LiftOff: requesting Google legacy alternatives',
+      );
+
+      final response =
+          await http.get(googleUrl);
+
+      debugPrint(
+        'LiftOff: legacy alternatives HTTP '
+        '${response.statusCode}',
+      );
+
+      if (response.statusCode != 200) {
+        debugPrint(
+          'LiftOff: ${response.body}',
+        );
+
+        return [];
+      }
+
+      final data =
+          jsonDecode(response.body)
+              as Map<String, dynamic>;
+
+      final status =
+          data['status']?.toString();
+
+      final routes =
+          data['routes'] as List<dynamic>?;
+
+      debugPrint(
+        'LiftOff: legacy Google status=$status '
+        'routes=${routes?.length ?? 0}',
+      );
+
+      if (status != 'OK' ||
+          routes == null ||
+          routes.isEmpty) {
+        debugPrint(
+          'LiftOff: legacy Google error='
+          '${data['error_message']}',
+        );
+
+        return [];
+      }
+
+      final results = <RouteResult>[];
+
+      for (final routeItem in routes) {
+        if (results.length >= 3) {
+          break;
+        }
+
+        final route =
+            routeItem as Map<String, dynamic>;
+
+        final overviewPolyline =
+            route['overview_polyline']
+                as Map<String, dynamic>?;
+
+        final encodedPoints =
+            overviewPolyline?['points']
+                as String?;
+
+        if (encodedPoints == null ||
+            encodedPoints.isEmpty) {
+          continue;
+        }
+
+        final points =
+            decodePolyline(
+          encodedPoints,
+        );
+
+        if (points.length < 2) {
+          continue;
+        }
+
+        final legs =
+            route['legs'] as List<dynamic>?;
+
+        num totalDistanceMeters = 0;
+        num totalDurationSeconds = 0;
+
+        if (legs != null) {
+          for (final legItem in legs) {
+            final leg =
+                legItem as Map<String, dynamic>;
+
+            final distance =
+                leg['distance']
+                    as Map<String, dynamic>?;
+
+            final duration =
+                leg['duration']
+                    as Map<String, dynamic>?;
+
+            totalDistanceMeters +=
+                (distance?['value'] as num?) ?? 0;
+
+            totalDurationSeconds +=
+                (duration?['value'] as num?) ?? 0;
+          }
+        }
+
+        final isDuplicate =
+            results.any(
+          (existing) =>
+              _routesAreEffectivelySame(
+            existing.points,
+            points,
+          ),
+        );
+
+        if (isDuplicate) {
+          continue;
+        }
+
+        results.add(
+          RouteResult(
+            points: points,
+            distanceText:
+                _formatDistanceText(
+              totalDistanceMeters,
+            ),
+            durationText:
+                _formatDurationText(
+              totalDurationSeconds,
+            ),
+            distanceMeters:
+                totalDistanceMeters,
+            durationSeconds:
+                totalDurationSeconds,
+          ),
+        );
+      }
+
+      return results;
+    } catch (error) {
+      debugPrint(
+        'LiftOff: legacy alternative routes error: '
+        '$error',
+      );
+
+      return [];
+    }
+  }
+
+  // ============================================================
+  // GOOGLE ROUTES API V2 — ALTERNATIVE ROUTES
+  //
+  // IMPORTANT CHANGE:
+  //
+  // We request:
+  //
+  //     GEO_JSON_LINESTRING
+  //
+  // instead of:
+  //
+  //     ENCODED_POLYLINE
+  //
+  // This means Google directly returns:
+  //
+  //     [longitude, latitude]
+  //
+  // coordinates.
+  //
+  // We then convert them directly to:
+  //
+  //     LatLng(latitude, longitude)
+  //
+  // No encoded-polyline decoding is performed here.
+  // ============================================================
+
+  Future<List<RouteResult>>
+      _getRoutesApiAlternatives(
+    LatLng origin,
+    LatLng destination,
+  ) async {
+    try {
+      final url = Uri.parse(
+        'https://routes.googleapis.com/'
+        'directions/v2:computeRoutes',
+      );
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+
+          'X-Goog-Api-Key':
+              _apiKey,
+
+          // IMPORTANT:
+          // Ask Google for GeoJSON geometry.
+          'X-Goog-FieldMask':
+              'routes.duration,'
+              'routes.distanceMeters,'
+              'routes.polyline.geoJsonLinestring',
+        },
+        body: jsonEncode({
+          'origin': {
+            'location': {
+              'latLng': {
+                'latitude':
+                    origin.latitude,
+                'longitude':
+                    origin.longitude,
+              },
+            },
+          },
+
+          'destination': {
+            'location': {
+              'latLng': {
+                'latitude':
+                    destination.latitude,
+                'longitude':
+                    destination.longitude,
+              },
+            },
+          },
+
+          'travelMode':
+              'DRIVE',
+
+          'routingPreference':
+              'TRAFFIC_AWARE',
+
+          // Request alternative routes.
+          'computeAlternativeRoutes':
+              true,
+
+          // Use high quality geometry for
+          // smoother map rendering.
+          'polylineQuality':
+              'HIGH_QUALITY',
+
+          // IMPORTANT:
+          // Direct GeoJSON coordinates.
+          'polylineEncoding':
+              'GEO_JSON_LINESTRING',
+
+          'languageCode':
+              'en-IN',
+
+          'units':
+              'METRIC',
+        }),
+      );
+
+      debugPrint(
+        'LiftOff: Routes API HTTP '
+        '${response.statusCode}',
+      );
+
+      if (response.statusCode != 200) {
+        debugPrint(
+          'LiftOff: Routes API response: '
+          '${response.body}',
+        );
+
+        return [];
+      }
+
+      final data =
+          jsonDecode(response.body)
+              as Map<String, dynamic>;
+
+      final routes =
+          data['routes'] as List<dynamic>?;
+
+      debugPrint(
+        'LiftOff: Routes API returned '
+        '${routes?.length ?? 0} routes',
+      );
+
+      if (routes == null ||
+          routes.isEmpty) {
+        return [];
+      }
+
+      final results = <RouteResult>[];
+
+      for (final routeItem in routes) {
+        if (results.length >= 3) {
+          break;
+        }
+
+        final route =
+            routeItem as Map<String, dynamic>;
+
+        // ------------------------------------------------------
+        // POLYLINE
+        // ------------------------------------------------------
+
+        final polyline =
+            route['polyline']
+                as Map<String, dynamic>?;
+
+        if (polyline == null) {
+          debugPrint(
+            'LiftOff: Routes API route has '
+            'no polyline.',
+          );
+
+          continue;
+        }
+
+        // ------------------------------------------------------
+        // GEOJSON LINESTRING
+        // ------------------------------------------------------
+
+        final points =
+            _parseGeoJsonLineString(
+          polyline[
+              'geoJsonLinestring'
+          ],
+        );
+
+        if (points.length < 2) {
+          debugPrint(
+            'LiftOff: Google Routes API '
+            'route geometry incomplete. '
+            'Points=${points.length}',
+          );
+
+          continue;
+        }
+
+        // ------------------------------------------------------
+        // DISTANCE
+        // ------------------------------------------------------
+
+        final distanceMeters =
+            (route['distanceMeters']
+                    as num?) ??
+                0;
+
+        // ------------------------------------------------------
+        // DURATION
+        // ------------------------------------------------------
+
+        final durationString =
+            route['duration']
+                    ?.toString() ??
+                '';
+
+        final durationSeconds =
+            _parseGoogleDurationSeconds(
+          durationString,
+        );
+
+        // ------------------------------------------------------
+        // DUPLICATE CHECK
+        // ------------------------------------------------------
+
+        final isDuplicate =
+            results.any(
+          (existing) =>
+              _routesAreEffectivelySame(
+            existing.points,
+            points,
+          ),
+        );
+
+        if (isDuplicate) {
+          debugPrint(
+            'LiftOff: Duplicate Google route skipped.',
+          );
+
+          continue;
+        }
+
+        // ------------------------------------------------------
+        // ADD ROUTE
+        // ------------------------------------------------------
+
+        results.add(
+          RouteResult(
+            points: points,
+
+            distanceText:
+                _formatDistanceText(
+              distanceMeters,
+            ),
+
+            durationText:
+                _formatDurationText(
+              durationSeconds,
+            ),
+
+            distanceMeters:
+                distanceMeters,
+
+            durationSeconds:
+                durationSeconds,
+          ),
+        );
+
+        debugPrint(
+          'LiftOff: Google route accepted with '
+          '${points.length} GeoJSON geometry points',
+        );
+
+        // ------------------------------------------------------
+        // DEBUG FIRST / LAST POINT
+        // ------------------------------------------------------
+
+        debugPrint(
+          'LiftOff: Route first point = '
+          '${points.first.latitude}, '
+          '${points.first.longitude}',
+        );
+
+        debugPrint(
+          'LiftOff: Route last point = '
+          '${points.last.latitude}, '
+          '${points.last.longitude}',
+        );
+      }
+
+      return results;
+    } catch (error) {
+      debugPrint(
+        'LiftOff: Routes API alternative '
+        'routes error: $error',
+      );
+
+      return [];
+    }
+  }
+
+  // ============================================================
+  // PARSE GEOJSON LINESTRING
+  //
+  // Google returns:
+  //
+  // {
+  //   "type": "LineString",
+  //   "coordinates": [
+  //     [longitude, latitude],
+  //     [longitude, latitude],
+  //     ...
+  //   ]
+  // }
+  //
+  // Google Maps Flutter expects:
+  //
+  // LatLng(latitude, longitude)
+  // ============================================================
+
+  List<LatLng> _parseGeoJsonLineString(
+    dynamic value,
+  ) {
+    try {
+      if (value == null) {
+        return [];
+      }
+
+      dynamic geoJson =
+          value;
+
+      // --------------------------------------------------------
+      // Handle JSON string if necessary.
+      // --------------------------------------------------------
+
+      if (geoJson is String) {
+        if (geoJson.trim().isEmpty) {
+          return [];
+        }
+
+        geoJson =
+            jsonDecode(geoJson);
+      }
+
+      if (geoJson is! Map<String, dynamic>) {
+        return [];
+      }
+
+      final coordinates =
+          geoJson['coordinates'];
+
+      if (coordinates is! List) {
+        return [];
+      }
+
+      final points =
+          <LatLng>[];
+
+      for (final coordinate
+          in coordinates) {
+        if (coordinate is! List ||
+            coordinate.length < 2) {
+          continue;
+        }
+
+        final longitude =
+            (coordinate[0] as num?)
+                ?.toDouble();
+
+        final latitude =
+            (coordinate[1] as num?)
+                ?.toDouble();
+
+        if (latitude == null ||
+            longitude == null) {
+          continue;
+        }
+
+        if (!latitude.isFinite ||
+            !longitude.isFinite) {
+          continue;
+        }
+
+        if (latitude < -90 ||
+            latitude > 90 ||
+            longitude < -180 ||
+            longitude > 180) {
+          continue;
+        }
+
+        points.add(
+          LatLng(
+            latitude,
+            longitude,
+          ),
+        );
+      }
+
+      return points;
+    } catch (error) {
+      debugPrint(
+        'LiftOff: GeoJSON route parsing error: '
+        '$error',
+      );
+
+      return [];
+    }
+  }
+
+  // ============================================================
+  // GOOGLE DURATION PARSER
+  // ============================================================
+
+  num _parseGoogleDurationSeconds(
+    String value,
+  ) {
+    if (value.isEmpty) {
+      return 0;
+    }
+
+    final cleaned =
+        value.trim().replaceAll(
+              's',
+              '',
+            );
+
+    return num.tryParse(
+          cleaned,
+        ) ??
+        0;
+  }
+
+  // ============================================================
+  // ROUTE COMPARISON HELPERS
+  // ============================================================
+
+  bool _routesAreEffectivelySame(
+    List<LatLng> first,
+    List<LatLng> second,
+  ) {
+    if (first.isEmpty ||
+        second.isEmpty) {
+      return false;
+    }
+
+    const sampleCount = 8;
+
+    for (
+      int i = 0;
+      i < sampleCount;
+      i++
+    ) {
+      final firstIndex =
+          ((first.length - 1) *
+                  i /
+                  (sampleCount - 1))
+              .round();
+
+      final secondIndex =
+          ((second.length - 1) *
+                  i /
+                  (sampleCount - 1))
+              .round();
+
+      final a =
+          first[firstIndex];
+
+      final b =
+          second[secondIndex];
+
+      final latDifference =
+          (a.latitude -
+                  b.latitude)
+              .abs();
+
+      final lngDifference =
+          (a.longitude -
+                  b.longitude)
+              .abs();
+
+      if (latDifference >
+              0.0001 ||
+          lngDifference >
+              0.0001) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  // ============================================================
+  // FORMAT DISTANCE
+  // ============================================================
+
+  String _formatDistanceText(
+    num meters,
+  ) {
+    final km =
+        meters / 1000;
+
+    if (km < 1) {
+      return '${meters.round()} m';
+    }
+
+    return '${km.toStringAsFixed(1)} km';
+  }
+
+  // ============================================================
+  // FORMAT DURATION
+  // ============================================================
+
+  String _formatDurationText(
+    num seconds,
+  ) {
+    final minutes =
+        (seconds / 60).round();
+
+    if (minutes < 1) {
+      return '< 1 min';
+    }
+
+    if (minutes == 1) {
+      return '1 min';
+    }
+
+    return '$minutes mins';
   }
 
   // ============================================================
@@ -364,15 +1070,14 @@ class GooglePlacesService {
 
     // ----------------------------------------------------------
     // 2. OSRM FALLBACK
-    //
-    // Returns an actual road route.
     // ----------------------------------------------------------
 
     try {
       final osrmUrl = Uri.parse(
         'https://router.project-osrm.org/'
         'route/v1/driving/'
-        '${origin.longitude},${origin.latitude};'
+        '${origin.longitude},'
+        '${origin.latitude};'
         '${destination.longitude},'
         '${destination.latitude}'
         '?overview=full'
@@ -418,11 +1123,13 @@ class GooglePlacesService {
                         as List<dynamic>;
 
                 final longitude =
-                    (coordinateList[0] as num)
+                    (coordinateList[0]
+                            as num)
                         .toDouble();
 
                 final latitude =
-                    (coordinateList[1] as num)
+                    (coordinateList[1]
+                            as num)
                         .toDouble();
 
                 return LatLng(
@@ -433,12 +1140,14 @@ class GooglePlacesService {
             ).toList();
 
             final distanceMeters =
-                (route['distance'] as num?)
+                (route['distance']
+                        as num?)
                     ?.toDouble() ??
                     0.0;
 
             final durationSeconds =
-                (route['duration'] as num?)
+                (route['duration']
+                        as num?)
                     ?.toDouble() ??
                     0.0;
 
@@ -500,12 +1209,6 @@ class GooglePlacesService {
 
   // ============================================================
   // REVERSE GEOCODING
-  //
-  // Converts latitude + longitude into:
-  //
-  // 1. Full address
-  // 2. Area
-  // 3. City
   // ============================================================
 
   Future<LocationAddress>
@@ -526,10 +1229,6 @@ class GooglePlacesService {
         url,
       );
 
-      // --------------------------------------------------------
-      // HTTP ERROR
-      // --------------------------------------------------------
-
       if (response.statusCode != 200) {
         debugPrint(
           'Reverse geocoding HTTP error: '
@@ -542,24 +1241,15 @@ class GooglePlacesService {
         );
 
         return const LocationAddress(
-          fullAddress:
-              '',
-
-          area:
-              '',
-
-          city:
-              '',
+          fullAddress: '',
+          area: '',
+          city: '',
         );
       }
 
       final data =
           jsonDecode(response.body)
               as Map<String, dynamic>;
-
-      // --------------------------------------------------------
-      // GOOGLE API STATUS ERROR
-      // --------------------------------------------------------
 
       if (data['status'] != 'OK') {
         debugPrint(
@@ -573,14 +1263,9 @@ class GooglePlacesService {
         );
 
         return const LocationAddress(
-          fullAddress:
-              '',
-
-          area:
-              '',
-
-          city:
-              '',
+          fullAddress: '',
+          area: '',
+          city: '',
         );
       }
 
@@ -591,23 +1276,11 @@ class GooglePlacesService {
       if (results == null ||
           results.isEmpty) {
         return const LocationAddress(
-          fullAddress:
-              '',
-
-          area:
-              '',
-
-          city:
-              '',
+          fullAddress: '',
+          area: '',
+          city: '',
         );
       }
-
-      // --------------------------------------------------------
-      // MOST SPECIFIC RESULT
-      //
-      // Google generally returns the closest and most specific
-      // address first.
-      // --------------------------------------------------------
 
       final firstResult =
           results.first
@@ -623,17 +1296,11 @@ class GooglePlacesService {
                   as List<dynamic>? ??
               [];
 
-      String area =
-          '';
-
-      String city =
-          '';
+      String area = '';
+      String city = '';
 
       // --------------------------------------------------------
       // EXTRACT AREA + CITY
-      //
-      // We use address component TYPES instead of parsing
-      // formatted_address.
       // --------------------------------------------------------
 
       for (final component
@@ -657,12 +1324,7 @@ class GooglePlacesService {
                     as String? ??
                 '';
 
-        // ------------------------------------------------------
         // CITY
-        //
-        // locality is normally the city.
-        // ------------------------------------------------------
-
         if (city.isEmpty &&
             types.contains(
               'locality',
@@ -671,17 +1333,7 @@ class GooglePlacesService {
               longName;
         }
 
-        // ------------------------------------------------------
         // AREA
-        //
-        // Priority:
-        //
-        // neighborhood
-        // sublocality_level_1
-        // sublocality
-        // sublocality_level_2
-        // ------------------------------------------------------
-
         if (area.isEmpty &&
             types.contains(
               'neighborhood',
@@ -717,8 +1369,6 @@ class GooglePlacesService {
 
       // --------------------------------------------------------
       // CITY FALLBACK
-      //
-      // Some locations do not return locality.
       // --------------------------------------------------------
 
       if (city.isEmpty) {
@@ -756,9 +1406,6 @@ class GooglePlacesService {
 
       // --------------------------------------------------------
       // AREA FALLBACK
-      //
-      // Sometimes Google returns no neighborhood/sublocality.
-      // In that case, use city rather than showing coordinates.
       // --------------------------------------------------------
 
       if (area.isEmpty &&
@@ -784,28 +1431,15 @@ class GooglePlacesService {
       );
 
       return const LocationAddress(
-        fullAddress:
-            '',
-
-        area:
-            '',
-
-        city:
-            '',
+        fullAddress: '',
+        area: '',
+        city: '',
       );
     }
   }
 
   // ============================================================
   // GET FULL ADDRESS
-  //
-  // This method is used by:
-  //
-  // - Source
-  // - Destination
-  // - Map selected locations
-  //
-  // It returns the complete Google formatted address.
   // ============================================================
 
   Future<String> getAddressFromCoordinates(
@@ -821,6 +1455,12 @@ class GooglePlacesService {
 
   // ============================================================
   // GOOGLE ENCODED POLYLINE DECODER
+  //
+  // Still required for:
+  // - Legacy Google Directions API
+  // - Existing code that uses encoded polylines
+  //
+  // Routes API V2 alternatives no longer use this decoder.
   // ============================================================
 
   static List<LatLng> decodePolyline(
@@ -829,23 +1469,13 @@ class GooglePlacesService {
     final points =
         <LatLng>[];
 
-    int index =
-        0;
+    int index = 0;
+    int latitude = 0;
+    int longitude = 0;
 
-    int latitude =
-        0;
-
-    int longitude =
-        0;
-
-    while (index <
-        encoded.length) {
-      int result =
-          0;
-
-      int shift =
-          0;
-
+    while (index < encoded.length) {
+      int result = 0;
+      int shift = 0;
       int byte;
 
       // --------------------------------------------------------
@@ -860,13 +1490,10 @@ class GooglePlacesService {
                 63;
 
         result |=
-            (byte & 0x1f)
-                << shift;
+            (byte & 0x1f) << shift;
 
-        shift +=
-            5;
-      } while (byte >=
-          0x20);
+        shift += 5;
+      } while (byte >= 0x20);
 
       final deltaLatitude =
           (result & 1) != 0
@@ -880,11 +1507,8 @@ class GooglePlacesService {
       // LONGITUDE
       // --------------------------------------------------------
 
-      result =
-          0;
-
-      shift =
-          0;
+      result = 0;
+      shift = 0;
 
       do {
         byte =
@@ -894,13 +1518,10 @@ class GooglePlacesService {
                 63;
 
         result |=
-            (byte & 0x1f)
-                << shift;
+            (byte & 0x1f) << shift;
 
-        shift +=
-            5;
-      } while (byte >=
-          0x20);
+        shift += 5;
+      } while (byte >= 0x20);
 
       final deltaLongitude =
           (result & 1) != 0

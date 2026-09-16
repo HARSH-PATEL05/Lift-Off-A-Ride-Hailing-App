@@ -57,7 +57,7 @@ class PostedRide {
       destinationLng: (json['destination_lng'] as num?)?.toDouble(),
       departureTime: DateTime.parse(json['departure_time'] as String),
       availableSeats: json['available_seats'] as int? ?? 3,
-      farePerSeat: (json['fare_per_seat'] as num?)?.toDouble() ?? 140.0,
+      farePerSeat: json['fare_per_seat'] == null ? 0.0 : double.tryParse(json['fare_per_seat'].toString()) ?? 0.0,
       vehicleModel: json['vehicle_model'] as String?,
       vehicleNumber: json['vehicle_number'] as String?,
       isWomenOnly: json['is_women_only'] as bool? ?? false,

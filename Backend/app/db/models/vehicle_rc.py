@@ -12,22 +12,24 @@ class VehicleRC(Base):
     id: Mapped[int] = mapped_column(
         primary_key=True,
         index=True,
+        autoincrement=True,
     )
 
-    # Multiple vehicles allowed per user
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"),
+    vehicle_id: Mapped[int] = mapped_column(
+        ForeignKey("vehicles.id"),
         nullable=False,
+        unique=True,
         index=True,
     )
 
-    user = relationship(
-        "User",
-        backref="vehicle_rcs",
+    vehicle = relationship(
+        "Vehicle",
+        back_populates="vehicle_rc",
     )
 
     # ─── RC Information ───
 
+    # Never store the plaintext RC number.
     rc_encrypted: Mapped[str] = mapped_column(
         String,
         nullable=False,
