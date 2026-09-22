@@ -33,8 +33,26 @@
   <title>liftoff_auth_test</title>
   <link rel="manifest" href="manifest.json">
 
-  <!-- Google Maps JavaScript API (for Web/Chrome) -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAoVHuAyzxiVUgspUsnM5crVkpgczdLdN0"></script>
+  <!-- Google Maps JavaScript API (Dynamically loaded from .env) -->
+  <script>
+    (function() {
+      fetch('.env')
+        .then(function(response) { return response.text(); })
+        .then(function(text) {
+          var match = text.match(/GOOGLE_MAPS_API_KEY=(.*)/);
+          var key = match ? match[1].trim() : '';
+          if (key) {
+            var script = document.createElement('script');
+            script.src = 'https://maps.googleapis.com/maps/api/js?key=' + key;
+            document.head.appendChild(script);
+          }
+        })
+        .catch(function(err) {
+          console.error('LiftOff: Notice - Failed to load .env for Google Maps JS API:', err);
+        });
+    })();
+  </script>
+
 </head>
 
 <body>

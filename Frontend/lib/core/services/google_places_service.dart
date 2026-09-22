@@ -1,13 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 
 /// ------------------------------------------------------------
 /// PLACE SUGGESTION MODEL
 /// ------------------------------------------------------------
-
 class PlaceSuggestion {
   final String placeId;
   final String description;
@@ -86,11 +86,16 @@ class GooglePlacesService {
   static final GooglePlacesService instance =
       GooglePlacesService._();
 
-  /// IMPORTANT:
-  /// For production, move this key to a backend
-  /// or environment variable.
-  static const String _apiKey =
-      'AIzaSyAoVHuAyzxiVUgspUsnM5crVkpgczdLdN0';
+  /// Retrieves the API key dynamically from .env via flutter_dotenv
+  /// or from compile-time dart-define configuration.
+  static String get _apiKey {
+    final envKey = dotenv.env['GOOGLE_MAPS_API_KEY'];
+    if (envKey != null && envKey.isNotEmpty) {
+      return envKey;
+    }
+    return const String.fromEnvironment('GOOGLE_MAPS_API_KEY');
+  }
+
 
   // ============================================================
   // PLACE AUTOCOMPLETE

@@ -12,7 +12,18 @@ val localProperties = Properties().apply {
         load(FileInputStream(localPropertiesFile))
     }
 }
-val mapsApiKey: String = localProperties.getProperty("MAPS_API_KEY") ?: ""
+
+val dotenvProperties = Properties().apply {
+    val dotenvFile = rootProject.file("../.env")
+    if (dotenvFile.exists()) {
+        load(FileInputStream(dotenvFile))
+    }
+}
+
+val mapsApiKey: String = dotenvProperties.getProperty("GOOGLE_MAPS_API_KEY")
+    ?: localProperties.getProperty("MAPS_API_KEY")
+    ?: ""
+
 
 android {
     namespace = "com.example.liftoff_auth_test"
