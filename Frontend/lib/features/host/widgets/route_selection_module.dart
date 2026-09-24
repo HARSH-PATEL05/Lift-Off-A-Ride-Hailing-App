@@ -267,6 +267,11 @@ class _RouteSelectionModuleState
     extends State<RouteSelectionModule> {
   static _RouteSelectionDraft? _savedDraft;
 
+  // Map display mode is kept at Module 1 state level so closing/reopening
+  // the location picker keeps the user's choice. When Module 1 is disposed
+  // (the host changes module), this state is recreated and starts in Normal.
+  MapType _mapType = MapType.normal;
+
   final LocationService _locationService =
       LocationService.instance;
 
@@ -1547,6 +1552,32 @@ class _RouteSelectionModuleState
                         ),
                       ),
 
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF1F4F8),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: IconButton(
+                          onPressed: () {
+                            _mapType = _mapType == MapType.hybrid
+                                ? MapType.normal
+                                : MapType.hybrid;
+                            setMapState(() {});
+                          },
+                          tooltip: _mapType == MapType.hybrid
+                              ? 'Normal map'
+                              : 'Hybrid view',
+                          icon: Icon(
+                            _mapType == MapType.hybrid
+                                ? Icons.map_outlined
+                                : Icons.layers_outlined,
+                            color: const Color(0xFF1677FF),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(width: 4),
+
                       IconButton(
                         onPressed: () =>
                             Navigator.of(
@@ -1574,6 +1605,8 @@ class _RouteSelectionModuleState
 
                     child:
                         GoogleMap(
+                      mapType: _mapType,
+
                       initialCameraPosition:
                           CameraPosition(
                         target:

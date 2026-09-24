@@ -1189,7 +1189,7 @@ class _MapViewState extends State<MapView>
       _mapType =
           _mapType ==
                   MapType.normal
-              ? MapType.satellite
+              ? MapType.hybrid
               : MapType.normal;
     });
   }

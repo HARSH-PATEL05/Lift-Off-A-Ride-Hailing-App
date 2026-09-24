@@ -312,6 +312,69 @@ class RideCreateRequest(BaseModel):
     )
 
 
+# ─── Request: Host updates an existing ride ──────────────────────────────────
+
+
+class RideUpdateRequest(BaseModel):
+    """
+    Complete ride snapshot used when the host edits a published ride.
+
+    The frontend should send the complete current ride state. This keeps
+    the stored route geometry, stops and route legs synchronized when any
+    route-related value is changed. The backend recalculates the fare.
+
+    Booking compatibility:
+        Booking support is not implemented yet, so the current backend
+        treats every ride as having no booking. The edit endpoint keeps
+        the booking check in one place so the real booking state can be
+        connected later without changing the frontend contract.
+    """
+
+    origin_name: str = Field(..., min_length=1, max_length=200)
+    origin_lat: float = Field(..., ge=-90, le=90)
+    origin_lng: float = Field(..., ge=-180, le=180)
+
+    destination_name: str = Field(..., min_length=1, max_length=200)
+    destination_lat: float = Field(..., ge=-90, le=90)
+    destination_lng: float = Field(..., ge=-180, le=180)
+
+    departure_time: datetime = Field(...)
+    ride_now: bool = Field(False)
+
+    available_seats: int = Field(
+        ...,
+        ge=1,
+        le=99,
+        description=(
+            "Passenger seats offered on LiftOff. Backend validates this "
+            "against vehicle seating capacity - 1."
+        ),
+    )
+
+    vehicle_id: int = Field(
+        ...,
+        gt=0,
+        description="Verified vehicle selected by the host.",
+    )
+
+    route_distance_meters: float = Field(..., ge=0)
+    route_duration_seconds: float = Field(..., ge=0)
+    route_geometry: list[dict[str, float]] = Field(..., min_length=2)
+
+    stops: list[RideStopCreate] = Field(default_factory=list)
+    route_legs: list[RideRouteLegCreate] = Field(..., min_length=1)
+
+    is_women_only: bool = Field(False)
+    democratic_consent: bool = Field(True)
+    flexible_pickup: bool = Field(False)
+    allow_luggage: bool = Field(False)
+    allow_pets: bool = Field(False)
+    allow_music: bool = Field(False)
+    is_ac: bool = Field(False)
+    additional_notes: str = Field(default="", max_length=1000)
+
+
+
 # ─── Response: Ride Stop ─────────────────────────────────────────────────────
 
 
@@ -413,6 +476,13 @@ class RideResponse(BaseModel):
 
     vehicle_id: int
 
+    vehicle_model: Optional[str] = None
+    vehicle_registration_number: Optional[str] = None
+    vehicle_category: Optional[str] = None
+    vehicle_subtype: Optional[str] = None
+    vehicle_type_specified: Optional[str] = None
+    seating_capacity: Optional[int] = None
+
     # ─────────────────────────────────────────────────────────────
     # Backend Fare
     # ─────────────────────────────────────────────────────────────
@@ -462,6 +532,19 @@ class RideResponse(BaseModel):
     # ─────────────────────────────────────────────────────────────
 
     status: str
+
+    # ─────────────────────────────────────────────────────────────
+    # Booking / Editability
+    # ─────────────────────────────────────────────────────────────
+
+    # Booking support is not implemented yet. This remains False until
+    # the future booking/matching workflow supplies the real value.
+    has_booking: bool = False
+
+    # Whether the host may edit this ride right now. The backend owns
+    # this decision; Flutter should not calculate it independently.
+    can_edit: bool = False
+    edit_block_reason: Optional[str] = None
 
     # ─────────────────────────────────────────────────────────────
     # Timestamps

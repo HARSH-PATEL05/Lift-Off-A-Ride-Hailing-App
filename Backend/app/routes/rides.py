@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List
 
@@ -21,6 +21,7 @@ from app.db.models.vehicle_rc import VehicleRC
 from app.db.schemas.ride import (
     RideCancelResponse,
     RideCreateRequest,
+    RideUpdateRequest,
     RideResponse,
     RideRouteLegResponse,
     RideStopResponse,
@@ -43,6 +44,139 @@ router = APIRouter(
     prefix="/rides",
     tags=["Rides"],
 )
+
+
+# ─── Ride lifecycle ───────────────────────────────────────────────────────────
+#
+# A ride has three time-based non-cancelled states:
+#
+#   scheduled -> more than 5 minutes before departure
+#   active    -> from 5 minutes before departure until the route ends
+#   completed -> after departure + confirmed route duration
+#
+# Cancelled rides remain cancelled and are never changed by the lifecycle
+# synchronizer.
+RIDE_ACTIVE_WINDOW = timedelta(minutes=5)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Return a timezone-aware UTC datetime."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _get_ride_lifecycle_status(
+    departure_time: datetime,
+    route_duration_seconds: float,
+    ride_now: bool,
+    now: datetime | None = None,
+) -> str:
+    """
+    Derive the current lifecycle status from the stored ride timing.
+
+    Ride Now rides use their server-side departure_time, so they enter
+    active immediately. Scheduled rides enter active exactly 5 minutes
+    before departure.
+
+    Completion is based on the confirmed route duration rather than
+    departure time alone.
+    """
+    current_time = _as_utc(now or datetime.now(timezone.utc))
+    departure = _as_utc(departure_time)
+
+    try:
+        duration_seconds = max(float(route_duration_seconds), 0.0)
+    except (TypeError, ValueError):
+        duration_seconds = 0.0
+
+    completion_time = departure + timedelta(seconds=duration_seconds)
+    active_start = departure if ride_now else departure - RIDE_ACTIVE_WINDOW
+
+    if current_time >= completion_time:
+        return "completed"
+
+    if current_time >= active_start:
+        return "active"
+
+    return "scheduled"
+
+
+def _sync_ride_status(
+    ride: Ride,
+    now: datetime | None = None,
+) -> bool:
+    """
+    Synchronize a ride's persisted status with its current lifecycle.
+
+    Returns True when the database value was changed.
+    Cancelled rides are intentionally left untouched.
+    """
+    if ride.status == "cancelled":
+        return False
+
+    next_status = _get_ride_lifecycle_status(
+        departure_time=ride.departure_time,
+        route_duration_seconds=ride.route_duration_seconds,
+        ride_now=ride.ride_now,
+        now=now,
+    )
+
+    if ride.status != next_status:
+        ride.status = next_status
+        return True
+
+    return False
+
+
+def _ride_has_booking(ride: Ride) -> bool:
+    """
+    Booking compatibility hook.
+
+    Booking/matching is not implemented yet, so the current system
+    deliberately reports False for every ride. When booking is added,
+    replace this implementation with the real booking lookup without
+    changing the edit API contract.
+    """
+
+    return False
+
+
+def _get_editability(ride: Ride) -> tuple[bool, str | None]:
+    """
+    Return the backend-owned edit permission for a published ride.
+
+    Current rule:
+      - ride must be active
+      - no booking must exist
+      - departure must be more than 10 minutes away
+
+    The booking condition is currently always False because booking has
+    not been implemented yet.
+    """
+
+    if ride.status not in {"scheduled", "active"}:
+        return False, f"Ride is already '{ride.status}' and cannot be edited."
+
+    if _ride_has_booking(ride):
+        return False, "Ride cannot be edited after a booking has been made."
+
+    departure_time = ride.departure_time
+    if departure_time.tzinfo is None:
+        departure_time = departure_time.replace(tzinfo=timezone.utc)
+    else:
+        departure_time = departure_time.astimezone(timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    remaining = departure_time - now
+
+    if remaining <= timedelta(0):
+        return False, "Ride departure time has already passed."
+
+    if remaining <= timedelta(minutes=10):
+        return False, "Ride cannot be edited within 10 minutes of departure."
+
+    return True, None
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -119,6 +253,37 @@ def _build_response(
 
         vehicle_id=ride.vehicle_id,
 
+        vehicle_model=(
+            ride.vehicle.vehicle_model
+            if ride.vehicle is not None
+            else None
+        ),
+        vehicle_registration_number=(
+            ride.vehicle.registration_number
+            if ride.vehicle is not None
+            else None
+        ),
+        vehicle_category=(
+            ride.vehicle.vehicle_category
+            if ride.vehicle is not None
+            else None
+        ),
+        vehicle_subtype=(
+            ride.vehicle.vehicle_subtype
+            if ride.vehicle is not None
+            else None
+        ),
+        vehicle_type_specified=(
+            ride.vehicle.vehicle_type_specified
+            if ride.vehicle is not None
+            else None
+        ),
+        seating_capacity=(
+            ride.vehicle.seating_capacity
+            if ride.vehicle is not None
+            else None
+        ),
+
         fare_per_seat=Decimal(
             str(ride.fare_per_seat)
         ),
@@ -147,6 +312,10 @@ def _build_response(
         terms_accepted=ride.terms_accepted,
 
         status=ride.status,
+
+        has_booking=_ride_has_booking(ride),
+        can_edit=_get_editability(ride)[0],
+        edit_block_reason=_get_editability(ride)[1],
 
         created_at=ride.created_at,
         updated_at=ride.updated_at,
@@ -311,7 +480,7 @@ def _get_verified_host_vehicle(
 
 
 def _validate_route_payload(
-    payload: RideCreateRequest,
+    payload: RideCreateRequest | RideUpdateRequest,
 ) -> None:
     """
     Validate consistency of the route snapshot supplied by
@@ -374,7 +543,7 @@ def _validate_route_payload(
 
 
 def _calculate_ride_fare(
-    payload: RideCreateRequest,
+    payload: RideCreateRequest | RideUpdateRequest,
     vehicle: Vehicle,
     departure_time: datetime,
 ) -> Decimal:
@@ -669,7 +838,7 @@ def create_ride(
         vehicle_id=vehicle.id,
 
         # Backend-generated fare.
-        fare_per_seat=fare_per_seat,
+        fare_per_seat=float(fare_per_seat),
 
         route_distance_meters=payload.route_distance_meters,
         route_duration_seconds=payload.route_duration_seconds,
@@ -690,7 +859,14 @@ def create_ride(
 
         terms_accepted=payload.terms_accepted,
 
-        status="active",
+        # Persist the lifecycle status immediately. Scheduled rides stay
+        # scheduled until the 5-minute active window begins.
+        status=_get_ride_lifecycle_status(
+            departure_time=departure_time,
+            route_duration_seconds=payload.route_duration_seconds,
+            ride_now=payload.ride_now,
+            now=now,
+        ),
     )
 
     db.add(ride)
@@ -790,22 +966,41 @@ def list_rides(
     db: Session = Depends(get_db),
 ) -> List[RideResponse]:
     """
-    Returns all currently active rides.
+    Returns rides that are currently available to the matching/search flow.
 
-    Future matching logic can filter these rides using
-    PostGIS route geometry, route legs and stops.
+    Scheduled rides are included because passengers may need to discover
+    them before the 5-minute active window. Completed and cancelled rides
+    are excluded.
     """
 
     rides = (
         db.query(Ride)
         .filter(
-            Ride.status == "active"
+            Ride.status.in_(["scheduled", "active"])
         )
         .order_by(
             Ride.departure_time.asc()
         )
         .all()
     )
+
+    now = datetime.now(timezone.utc)
+    changed = False
+
+    for ride in rides:
+        if _sync_ride_status(ride, now):
+            changed = True
+
+    # A ride can cross from scheduled/active to completed while this
+    # request is being processed, so remove anything no longer publishable.
+    rides = [
+        ride
+        for ride in rides
+        if ride.status in {"scheduled", "active"}
+    ]
+
+    if changed:
+        db.commit()
 
     result = []
 
@@ -861,6 +1056,16 @@ def list_my_rides(
         .all()
     )
 
+    now = datetime.now(timezone.utc)
+    changed = False
+
+    for ride in rides:
+        if _sync_ride_status(ride, now):
+            changed = True
+
+    if changed:
+        db.commit()
+
     return [
         _build_response(
             ride,
@@ -868,6 +1073,243 @@ def list_my_rides(
         )
         for ride in rides
     ]
+
+
+# ─── PATCH /rides/{ride_id} — Edit a published ride ─────────────────────────
+
+
+@router.patch(
+    "/{ride_id}",
+    response_model=RideResponse,
+    summary="Edit a published ride (host only)",
+)
+def update_ride(
+    ride_id: int,
+    payload: RideUpdateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RideResponse:
+    """
+    Edit a published ride.
+
+    Current booking compatibility rule:
+        Booking is not implemented yet, so every ride currently has
+        has_booking=False. The booking check is kept behind
+        _ride_has_booking() so the real booking workflow can replace it
+        later without changing this endpoint.
+
+    Edit is allowed only when:
+        1. The authenticated user owns the ride.
+        2. The ride is scheduled/active and still more than 10 minutes away.
+        3. No booking exists.
+
+    The client sends a complete ride snapshot. Route geometry, stops and
+    route legs are replaced together so they cannot become inconsistent.
+    Fare is always recalculated by the backend.
+    """
+
+    db_user = _get_current_db_user(
+        current_user,
+        db,
+    )
+
+    ride = (
+        db.query(Ride)
+        .filter(Ride.id == ride_id)
+        .first()
+    )
+
+    if not ride:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Ride {ride_id} not found.",
+        )
+
+    if ride.host_user_id != db_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only edit your own rides.",
+        )
+
+    if _sync_ride_status(ride):
+        db.commit()
+        db.refresh(ride)
+
+    can_edit, reason = _get_editability(ride)
+    if not can_edit:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=reason or "This ride cannot be edited.",
+        )
+
+    # ── Schedule validation ──────────────────────────────────────
+
+    now = datetime.now(timezone.utc)
+    departure_time = payload.departure_time
+
+    if departure_time.tzinfo is None:
+        departure_time = departure_time.replace(
+            tzinfo=timezone.utc
+        )
+    else:
+        departure_time = departure_time.astimezone(
+            timezone.utc
+        )
+
+    if payload.ride_now:
+        departure_time = now
+    elif departure_time <= now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Scheduled departure time must be in the future.",
+        )
+
+    # ── Vehicle validation ──────────────────────────────────────
+
+    vehicle = _get_verified_host_vehicle(
+        db_user,
+        payload.vehicle_id,
+        db,
+    )
+
+    max_available_seats = vehicle.seating_capacity - 1
+
+    if max_available_seats < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "This vehicle does not have enough seating capacity "
+                "to offer a passenger seat."
+            ),
+        )
+
+    if payload.available_seats > max_available_seats:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"This vehicle allows a maximum of "
+                f"{max_available_seats} passenger seat(s) on LiftOff."
+            ),
+        )
+
+    # ── Route validation ─────────────────────────────────────────
+
+    _validate_route_payload(payload)
+
+    try:
+        route_geometry = line_from_api_points(
+            payload.route_geometry
+        )
+
+        route_leg_geometries = {
+            leg.leg_order: line_from_api_points(
+                leg.geometry
+            )
+            for leg in payload.route_legs
+        }
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid route geometry: {exc}",
+        ) from exc
+
+    # ── Backend fare recalculation ───────────────────────────────
+
+    fare_per_seat = _calculate_ride_fare(
+        payload,
+        vehicle,
+        departure_time,
+    )
+
+    # ── Update parent ride ───────────────────────────────────────
+
+    ride.origin_name = payload.origin_name.strip()
+    ride.origin_lat = payload.origin_lat
+    ride.origin_lng = payload.origin_lng
+
+    ride.destination_name = payload.destination_name.strip()
+    ride.destination_lat = payload.destination_lat
+    ride.destination_lng = payload.destination_lng
+
+    ride.departure_time = departure_time
+    ride.ride_now = payload.ride_now
+    ride.available_seats = payload.available_seats
+    ride.vehicle_id = vehicle.id
+
+    ride.fare_per_seat = float(fare_per_seat)
+
+    ride.route_distance_meters = payload.route_distance_meters
+    ride.route_duration_seconds = payload.route_duration_seconds
+    ride.route_geometry = route_geometry
+
+    ride.is_women_only = payload.is_women_only
+    ride.democratic_consent = payload.democratic_consent
+    ride.flexible_pickup = payload.flexible_pickup
+    ride.allow_luggage = payload.allow_luggage
+    ride.allow_pets = payload.allow_pets
+    ride.allow_music = payload.allow_music
+    ride.is_ac = payload.is_ac
+    ride.additional_notes = payload.additional_notes.strip()
+
+    # Recalculate lifecycle because both departure time and route duration
+    # may have changed during an edit.
+    ride.status = _get_ride_lifecycle_status(
+        departure_time=departure_time,
+        route_duration_seconds=payload.route_duration_seconds,
+        ride_now=payload.ride_now,
+        now=now,
+    )
+
+    # ── Replace route children as one synchronized snapshot ──────
+
+    db.query(RideStop).filter(
+        RideStop.ride_id == ride.id
+    ).delete(synchronize_session=False)
+
+    db.query(RideRouteLeg).filter(
+        RideRouteLeg.ride_id == ride.id
+    ).delete(synchronize_session=False)
+
+    for stop_data in payload.stops:
+        db.add(
+            RideStop(
+                ride_id=ride.id,
+                stop_order=stop_data.stop_order,
+                stop_name=stop_data.stop_name.strip(),
+                stop_lat=stop_data.stop_lat,
+                stop_lng=stop_data.stop_lng,
+            )
+        )
+
+    for leg_data in payload.route_legs:
+        db.add(
+            RideRouteLeg(
+                ride_id=ride.id,
+                leg_order=leg_data.leg_order,
+                start_name=leg_data.start_name.strip(),
+                start_lat=leg_data.start_lat,
+                start_lng=leg_data.start_lng,
+                end_name=leg_data.end_name.strip(),
+                end_lat=leg_data.end_lat,
+                end_lng=leg_data.end_lng,
+                distance_meters=leg_data.distance_meters,
+                duration_seconds=leg_data.duration_seconds,
+                geometry=route_leg_geometries[leg_data.leg_order],
+            )
+        )
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(ride)
+
+    return _build_response(
+        ride,
+        db_user,
+    )
 
 
 # ─── PATCH /rides/{ride_id}/cancel ───────────────────────────────────────────
@@ -914,13 +1356,46 @@ def cancel_ride(
             detail="You can only cancel your own rides.",
         )
 
-    if ride.status != "active":
+    # Refresh lifecycle first so the cancellation decision is based on
+    # the current server time, not a stale persisted status.
+    _sync_ride_status(ride)
+
+    # Host cancellation is intentionally allowed ONLY for scheduled rides.
+    # Active rides are not cancellable here; their future automatic
+    # unoccurrence/expiry handling will be implemented separately.
+    if ride.status != "scheduled":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"Ride is already '{ride.status}' "
-                "and cannot be cancelled."
+                f"Ride is '{ride.status}' and cannot be cancelled by the "
+                "host. Only scheduled rides can be cancelled."
             ),
+        )
+
+    # Keep the same 10-minute safety window used by ride editing.
+    departure_time = ride.departure_time
+    if departure_time.tzinfo is None:
+        departure_time = departure_time.replace(tzinfo=timezone.utc)
+    else:
+        departure_time = departure_time.astimezone(timezone.utc)
+
+    remaining = departure_time - datetime.now(timezone.utc)
+
+    if remaining <= timedelta(minutes=10):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Scheduled ride cannot be cancelled within 10 minutes "
+                "of departure."
+            ),
+        )
+
+    # Booking/matching compatibility hook.
+    # Currently this returns False because booking is not implemented yet.
+    if _ride_has_booking(ride):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Scheduled ride cannot be cancelled after a booking has been made.",
         )
 
     ride.status = "cancelled"

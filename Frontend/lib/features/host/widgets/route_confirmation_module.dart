@@ -704,17 +704,17 @@ class _RouteConfirmationModuleState extends State<RouteConfirmationModule> {
           const SizedBox(height: 10),
 
           _buildMapControlButton(
-            icon: _mapType == MapType.satellite
+            icon: _mapType == MapType.hybrid
                 ? Icons.map_outlined
-                : Icons.satellite_alt_outlined,
-            tooltip: _mapType == MapType.satellite
+                : Icons.layers_outlined,
+            tooltip: _mapType == MapType.hybrid
                 ? 'Normal map'
-                : 'Satellite view',
+                : 'Hybrid view',
             onPressed: () {
               setState(() {
-                _mapType = _mapType == MapType.satellite
+                _mapType = _mapType == MapType.hybrid
                     ? MapType.normal
-                    : MapType.satellite;
+                    : MapType.hybrid;
               });
             },
           ),
