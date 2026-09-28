@@ -204,6 +204,7 @@ class _TrustVaultScreenState extends State<TrustVaultScreen> {
                                   .instance
                                   .verifyAadhaar(
                                 controller.text,
+                                _profile?.phoneNumber ?? '',
                               );
                             } else {
                               updated = await VerificationService

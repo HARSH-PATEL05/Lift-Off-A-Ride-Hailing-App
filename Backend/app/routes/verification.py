@@ -33,6 +33,32 @@ from app.services.Authentication.vehicle_rc.provider import (
 from app.core.security import sensitive_data_encryption
 
 
+def _normalize_phone_number(phone_number: str) -> str:
+    """
+    Normalize an Indian mobile number to +91XXXXXXXXXX.
+
+    Accepts common formatting such as:
+    +91 98765 43210, 919876543210, or 9876543210.
+    """
+
+    digits = "".join(
+        character
+        for character in phone_number
+        if character.isdigit()
+    )
+
+    if digits.startswith("91") and len(digits) == 12:
+        digits = digits[2:]
+
+    if len(digits) != 10 or digits[0] not in "6789":
+        raise HTTPException(
+            status_code=422,
+            detail="Please provide a valid Indian mobile number.",
+        )
+
+    return f"+91{digits}"
+
+
 def _build_user_profile_response(
     db: Session,
     user: User,
@@ -144,6 +170,24 @@ def _build_user_profile_response(
     )
 
     # ─────────────────────────────────────────────
+    # Masked Driving Licence
+    # ─────────────────────────────────────────────
+    #
+    # Only the last four characters are exposed to
+    # the frontend. The complete licence number remains
+    # encrypted in the database.
+    #
+    # Example:
+    # XXXX-XXXX-1234
+    # ─────────────────────────────────────────────
+
+    masked_driving_licence = (
+        f"XXXX-XXXX-{dl.dl_last_four}"
+        if dl
+        else None
+    )
+
+    # ─────────────────────────────────────────────
     # Return Profile
     # ─────────────────────────────────────────────
 
@@ -155,6 +199,10 @@ def _build_user_profile_response(
         "full_name": user.full_name,
         "avatar_url": user.avatar_url,
 
+        # Phone
+        "phone_number": user.phone_number,
+        "phone_verified": user.phone_verified,
+
         "aadhaar_verified": aadhaar_verified,
 
         "driving_licence_verified": dl_verified,
@@ -164,6 +212,9 @@ def _build_user_profile_response(
         "vehicle_rc_verified": rc_verified,
 
         "masked_aadhaar": masked_aadhaar,
+
+        # Masked Driving Licence
+        "masked_driving_licence": masked_driving_licence,
 
         "fuel_recovered_inr": (
             stat.fuel_recovered_inr
@@ -247,6 +298,34 @@ async def verify_aadhaar(
         "Supabase User ID:",
         current_user.id,
     )
+
+    # ─────────────────────────────────────────────
+    # Normalize and validate phone number
+    # ─────────────────────────────────────────────
+
+    phone_number = _normalize_phone_number(
+        request.phone_number
+    )
+
+    existing_phone_user = (
+        db.query(User)
+        .filter(
+            User.phone_number == phone_number,
+            User.id != user.id,
+        )
+        .first()
+    )
+
+    if existing_phone_user is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This phone number is already associated "
+                "with another LiftOff account."
+            ),
+        )
+
+    print("Normalized phone number:", phone_number)
 
     # ─────────────────────────────────────────────
     # Get Verification Provider
@@ -368,6 +447,17 @@ async def verify_aadhaar(
                 "verification_reference"
             )
         )
+
+    # ─────────────────────────────────────────────
+    # Save LiftOff phone number
+    # ─────────────────────────────────────────────
+
+    user.phone_number = phone_number
+
+    # Entering a phone number does not prove ownership.
+    # Phone verification will be handled separately through
+    # a dedicated OTP verification flow.
+    user.phone_verified = False
 
     # ─────────────────────────────────────────────
     # Save

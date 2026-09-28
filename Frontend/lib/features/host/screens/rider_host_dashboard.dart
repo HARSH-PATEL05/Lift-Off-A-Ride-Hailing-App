@@ -753,22 +753,27 @@ class _RiderHostDashboardState
                   // ------------------------------------------------
 
                   else
-                    ListView.separated(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: _myRides.length,
-                      separatorBuilder: (_, __) =>
-                          const SizedBox(height: 12),
-                      itemBuilder: (context, index) {
-                        final ride = _myRides[index];
+                    MediaQuery.removePadding(
+                      context: context,
+                      removeTop: true,
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        padding: EdgeInsets.zero,
+                        itemCount: _myRides.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 12),
+                        itemBuilder: (context, index) {
+                          final ride = _myRides[index];
 
-                        return GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onLongPress: () =>
-                              _showRideDetails(ride),
-                          child: _buildPublishedRideCard(ride),
-                        );
-                      },
+                          return GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onLongPress: () =>
+                                _showRideDetails(ride),
+                            child: _buildPublishedRideCard(ride),
+                          );
+                        },
+                      ),
                     ),                ],
               ),
             ),

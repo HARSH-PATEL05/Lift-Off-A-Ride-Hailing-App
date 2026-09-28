@@ -8,6 +8,21 @@ class UserProfile {
   final String? fullName;
   final String? avatarUrl;
 
+  // ─── Phone ───
+
+  /// User's LiftOff profile phone number.
+  ///
+  /// This can be null if the user has not completed
+  /// the phone-number collection flow yet.
+  final String? phoneNumber;
+
+  /// Indicates whether the phone number has been
+  /// independently verified.
+  ///
+  /// Providing a phone number does not automatically
+  /// make it verified.
+  final bool phoneVerified;
+
   // ─── Verification Status ───
 
   final bool aadhaarVerified;
@@ -19,7 +34,13 @@ class UserProfile {
   // Example: XXXX-XXXX-1234
   final String? maskedAadhaar;
 
+  // ─── Driving Licence Display ───
+
+  // Example: XXXX-XXXX-1234
+  final String? maskedDrivingLicence;
+
   // ─── Host Performance Stats ───
+
   final double fuelRecoveredInr;
   final int sharedCommutesCount;
   final double co2SavedKg;
@@ -33,20 +54,40 @@ class UserProfile {
     required this.email,
     this.fullName,
     this.avatarUrl,
+
+    // Phone
+    this.phoneNumber,
+    this.phoneVerified = false,
+
+    // Verification
     this.aadhaarVerified = false,
     this.dlVerified = false,
     this.vehicleRcVerified = false,
+
+    // Aadhaar
     this.maskedAadhaar,
+
+    // Driving Licence
+    this.maskedDrivingLicence,
+
+    // Host stats
     this.fuelRecoveredInr = 0.0,
     this.sharedCommutesCount = 0,
     this.co2SavedKg = 0.0,
+
+    // Timestamp
     required this.createdAt,
   });
 
   /// Parse from FastAPI JSON response.
-  factory UserProfile.fromJson(Map<String, dynamic> json) {
+  factory UserProfile.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return UserProfile(
+      // ─────────────────────────────────────────
       // Supabase user UUID
+      // ─────────────────────────────────────────
+
       id: json['user_id'] as String,
 
       email: json['email'] as String,
@@ -55,30 +96,74 @@ class UserProfile {
 
       avatarUrl: json['avatar_url'] as String?,
 
-      // Verification flags
+      // ─────────────────────────────────────────
+      // Phone
+      // ─────────────────────────────────────────
+
+      phoneNumber: json['phone_number'] as String?,
+
+      phoneVerified:
+          json['phone_verified'] as bool? ?? false,
+
+      // ─────────────────────────────────────────
+      // Verification Flags
+      // ─────────────────────────────────────────
+
       aadhaarVerified:
           json['aadhaar_verified'] as bool? ?? false,
 
-      dlVerified: (json['driving_licence_verified'] as bool?) ??
-          (json['dl_verified'] as bool?) ??
-          false,
+      dlVerified:
+          (json['driving_licence_verified'] as bool?) ??
+              (json['dl_verified'] as bool?) ??
+              false,
 
-      vehicleRcVerified: (json['rc_verified'] as bool?) ??
-          (json['vehicle_rc_verified'] as bool?) ??
-          false,
+      vehicleRcVerified:
+          (json['rc_verified'] as bool?) ??
+              (json['vehicle_rc_verified'] as bool?) ??
+              false,
 
-      // Aadhaar masked value
+      // ─────────────────────────────────────────
+      // Aadhaar Masked Value
+      // ─────────────────────────────────────────
+
       maskedAadhaar:
           json['masked_aadhaar'] as String?,
 
-      // Host Stats
-      fuelRecoveredInr: (json['fuel_recovered_inr'] as num?)?.toDouble() ?? 0.0,
-      sharedCommutesCount: (json['shared_commutes_count'] as int?) ?? 0,
-      co2SavedKg: (json['co2_saved_kg'] as num?)?.toDouble() ?? 0.0,
+      // ─────────────────────────────────────────
+      // Driving Licence Masked Value
+      // ─────────────────────────────────────────
 
-      // Backend timestamp
+      maskedDrivingLicence:
+          (json['masked_driving_licence'] as String?) ??
+              (json['masked_dl'] as String?),
+
+      // ─────────────────────────────────────────
+      // Host Stats
+      // ─────────────────────────────────────────
+
+      fuelRecoveredInr:
+          (json['fuel_recovered_inr'] as num?)
+                  ?.toDouble() ??
+              0.0,
+
+      sharedCommutesCount:
+          (json['shared_commutes_count'] as num?)
+                  ?.toInt() ??
+              0,
+
+      co2SavedKg:
+          (json['co2_saved_kg'] as num?)
+                  ?.toDouble() ??
+              0.0,
+
+      // ─────────────────────────────────────────
+      // Backend Timestamp
+      // ─────────────────────────────────────────
+
       createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'] as String)
+          ? DateTime.parse(
+              json['created_at'] as String,
+            )
           : DateTime.now(),
     );
   }
@@ -91,16 +176,27 @@ class UserProfile {
       'full_name': fullName,
       'avatar_url': avatarUrl,
 
+      // Phone
+      'phone_number': phoneNumber,
+      'phone_verified': phoneVerified,
+
+      // Verification
       'aadhaar_verified': aadhaarVerified,
       'driving_licence_verified': dlVerified,
       'rc_verified': vehicleRcVerified,
 
+      // Aadhaar
       'masked_aadhaar': maskedAadhaar,
 
+      // Driving Licence
+      'masked_driving_licence': maskedDrivingLicence,
+
+      // Host Stats
       'fuel_recovered_inr': fuelRecoveredInr,
       'shared_commutes_count': sharedCommutesCount,
       'co2_saved_kg': co2SavedKg,
 
+      // Timestamp
       'created_at': createdAt.toIso8601String(),
     };
   }
@@ -112,16 +208,27 @@ class UserProfile {
     String? fullName,
     String? avatarUrl,
 
+    // Phone
+    String? phoneNumber,
+    bool? phoneVerified,
+
+    // Verification
     bool? aadhaarVerified,
     bool? dlVerified,
     bool? vehicleRcVerified,
 
+    // Aadhaar
     String? maskedAadhaar,
 
+    // Driving Licence
+    String? maskedDrivingLicence,
+
+    // Host Stats
     double? fuelRecoveredInr,
     int? sharedCommutesCount,
     double? co2SavedKg,
 
+    // Timestamp
     DateTime? createdAt,
   }) {
     return UserProfile(
@@ -130,6 +237,12 @@ class UserProfile {
       fullName: fullName ?? this.fullName,
       avatarUrl: avatarUrl ?? this.avatarUrl,
 
+      // Phone
+      phoneNumber: phoneNumber ?? this.phoneNumber,
+      phoneVerified:
+          phoneVerified ?? this.phoneVerified,
+
+      // Verification
       aadhaarVerified:
           aadhaarVerified ?? this.aadhaarVerified,
 
@@ -139,18 +252,28 @@ class UserProfile {
       vehicleRcVerified:
           vehicleRcVerified ?? this.vehicleRcVerified,
 
+      // Aadhaar
       maskedAadhaar:
           maskedAadhaar ?? this.maskedAadhaar,
 
+      // Driving Licence
+      maskedDrivingLicence:
+          maskedDrivingLicence ??
+              this.maskedDrivingLicence,
+
+      // Host Stats
       fuelRecoveredInr:
-          fuelRecoveredInr ?? this.fuelRecoveredInr,
+          fuelRecoveredInr ??
+              this.fuelRecoveredInr,
 
       sharedCommutesCount:
-          sharedCommutesCount ?? this.sharedCommutesCount,
+          sharedCommutesCount ??
+              this.sharedCommutesCount,
 
       co2SavedKg:
           co2SavedKg ?? this.co2SavedKg,
 
+      // Timestamp
       createdAt:
           createdAt ?? this.createdAt,
     );

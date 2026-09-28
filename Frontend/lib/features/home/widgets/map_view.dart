@@ -262,11 +262,11 @@ class _MapViewState extends State<MapView>
       (LatLng position) {
         if (!mounted) return;
 
-        debugPrint(
-          'MapView: CENTRALIZED LIVE LOCATION: '
-          '${position.latitude}, '
-          '${position.longitude}',
-        );
+        // debugPrint(
+        //   'MapView: CENTRALIZED LIVE LOCATION: '
+        //   '${position.latitude}, '
+        //   '${position.longitude}',
+        // );
 
         _updateLivePosition(
           position,

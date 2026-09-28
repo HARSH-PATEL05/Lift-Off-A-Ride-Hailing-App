@@ -28,6 +28,7 @@ class AadhaarVerificationScreen extends StatefulWidget {
 class _AadhaarVerificationScreenState extends State<AadhaarVerificationScreen>
     with SingleTickerProviderStateMixin {
   final _aadhaarController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _isVerifying = false;
   String? _errorMessage;
@@ -53,6 +54,7 @@ class _AadhaarVerificationScreenState extends State<AadhaarVerificationScreen>
   @override
   void dispose() {
     _aadhaarController.dispose();
+    _phoneController.dispose();
     _fadeController.dispose();
     super.dispose();
   }
@@ -67,7 +69,10 @@ class _AadhaarVerificationScreenState extends State<AadhaarVerificationScreen>
 
     try {
       final updatedProfile = await VerificationService.instance
-          .verifyAadhaar(_aadhaarController.text);
+          .verifyAadhaar(
+            _aadhaarController.text,
+            _phoneController.text,
+          );
 
       if (mounted) {
         setState(() {
@@ -190,6 +195,88 @@ class _AadhaarVerificationScreenState extends State<AadhaarVerificationScreen>
                       ),
                     ],
                   ),
+                ),
+
+                // ─── Phone Number Input ───
+                const SizedBox(height: 32),
+                Text(
+                  'PHONE NUMBER',
+                  style: AppTextStyles.caption.copyWith(
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
+                    color: AppColors.mediumGray,
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                TextFormField(
+                  controller: _phoneController,
+                  keyboardType: TextInputType.phone,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(15),
+                  ],
+                  style: AppTextStyles.body.copyWith(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'Enter your phone number',
+                    hintStyle: AppTextStyles.body.copyWith(
+                      color: AppColors.lightGray,
+                      fontWeight: FontWeight.w400,
+                    ),
+                    filled: true,
+                    fillColor: AppColors.softGray,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 18,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide:
+                          const BorderSide(color: AppColors.borderGray),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide:
+                          const BorderSide(color: AppColors.lightGray),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: const BorderSide(
+                        color: AppColors.primaryTeal,
+                        width: 2,
+                      ),
+                    ),
+                    errorBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide:
+                          const BorderSide(color: AppColors.errorRed),
+                    ),
+                    prefixIcon: const Padding(
+                      padding: EdgeInsets.only(left: 16, right: 8),
+                      child: Icon(
+                        Icons.phone_rounded,
+                        color: AppColors.mediumGray,
+                        size: 22,
+                      ),
+                    ),
+                    prefixIconConstraints: const BoxConstraints(
+                      minWidth: 0,
+                      minHeight: 0,
+                    ),
+                  ),
+                  validator: (value) {
+                    final digits =
+                        value?.replaceAll(RegExp(r'\D'), '') ?? '';
+
+                    if (digits.length < 10 || digits.length > 15) {
+                      return 'Please enter a valid phone number';
+                    }
+
+                    return null;
+                  },
                 ),
 
                 // ─── Aadhaar Input ───
@@ -348,7 +435,7 @@ class _AadhaarVerificationScreenState extends State<AadhaarVerificationScreen>
                           size: 14, color: AppColors.subtleGray),
                       const SizedBox(width: 6),
                       Text(
-                        'End-to-end encrypted • UIDAI sandbox verified',
+                        'Encrypted verification • UIDAI sandbox verified',
                         style: AppTextStyles.caption.copyWith(
                           fontSize: 11,
                           color: AppColors.subtleGray,

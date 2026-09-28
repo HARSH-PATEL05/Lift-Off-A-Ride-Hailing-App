@@ -4,8 +4,8 @@ import '../../../core/api/api_client.dart';
 import '../../../core/api/api_endpoints.dart';
 import '../../../core/api/api_exceptions.dart';
 import '../../../core/services/vehicle_service.dart';
-import '../../../core/services/google_places_service.dart';
 import '../../auth/screens/vehicle_rc_verification_screen.dart';
+import '../../../core/services/google_places_service.dart';
 import 'route_selection_module.dart';
 import 'route_confirmation_module.dart';
 import 'ride_details_module.dart';
@@ -34,46 +34,77 @@ class OfferRideModal extends StatefulWidget {
 
 class _OfferRideModalState extends State<OfferRideModal> {
   int _currentStep = 0;
-
   RouteSelectionData? _routeData;
-
   bool _isPublishing = false;
 
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
+    final keyboardInset = mediaQuery.viewInsets.bottom;
+    final screenHeight = mediaQuery.size.height;
 
-    return SafeArea(
-      top: false,
-      child: Container(
-        constraints: BoxConstraints(
-          maxHeight: mediaQuery.size.height * 0.94,
-        ),
-        decoration: const BoxDecoration(
-          color: Colors.white,
+    // Android does not automatically move a modal-bottom-sheet's bottom edge
+    // above the IME. The previous implementation reduced the sheet height,
+    // but left the sheet anchored to the physical bottom of the screen. That
+    // is why the keyboard covered the lower part of the white sheet.
+    //
+    // The fix is deliberately split into two dimensions:
+    //   1. sheetHeight = the actually visible height.
+    //   2. bottom padding = keyboardInset, which moves the whole sheet above
+    //      the keyboard instead of leaving it underneath the IME.
+    //
+    // This keeps one scroll owner: this parent. Child modules remain normal
+    // Columns and never add their own keyboard padding.
+    final visibleHeight =
+        (screenHeight - keyboardInset).clamp(0.0, screenHeight).toDouble();
+
+    final keyboardOpen = keyboardInset > 0.0;
+
+    final closedSheetHeight = (screenHeight * 0.92)
+        .clamp(0.0, screenHeight)
+        .toDouble();
+
+    // When the keyboard is closed, preserve the comfortable bottom-sheet
+    // presentation. As soon as Android opens the keyboard, the sheet becomes
+    // the full visible viewport above the IME.
+    final targetHeight = keyboardOpen ? visibleHeight : closedSheetHeight;
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: keyboardInset),
+      child: SizedBox(
+        width: double.infinity,
+        height: targetHeight,
+        child: ClipRRect(
           borderRadius: BorderRadius.vertical(
-            top: Radius.circular(28),
+            top: Radius.circular(keyboardOpen ? 0 : 28),
           ),
-        ),
-        child: Column(
-          children: [
-            _buildHeader(),
-            _buildStepIndicator(),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                child: _buildCurrentStep(),
+          child: Material(
+            color: Colors.white,
+            child: SafeArea(
+              top: true,
+              bottom: false,
+              child: Column(
+              children: [
+                _buildHeader(),
+                _buildStepIndicator(),
+                Expanded(
+                  child: SingleChildScrollView(
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
+                    child: _buildCurrentStep(),
+                  ),
+                ),
+              ],
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
   }
-
-  // ================================================================
-  // HEADER
-  // ================================================================
 
   Widget _buildHeader() {
     return Padding(
@@ -123,10 +154,6 @@ class _OfferRideModalState extends State<OfferRideModal> {
       ),
     );
   }
-
-  // ================================================================
-  // STEP INDICATOR
-  // ================================================================
 
   Widget _buildStepIndicator() {
     return Padding(
@@ -217,10 +244,6 @@ class _OfferRideModalState extends State<OfferRideModal> {
     );
   }
 
-  // ================================================================
-  // CURRENT STEP
-  // ================================================================
-
   Widget _buildCurrentStep() {
     switch (_currentStep) {
       case 0:
@@ -230,7 +253,6 @@ class _OfferRideModalState extends State<OfferRideModal> {
 
       case 1:
         final data = _routeData;
-
         if (data == null) {
           return const SizedBox.shrink();
         }
@@ -246,16 +268,13 @@ class _OfferRideModalState extends State<OfferRideModal> {
 
       case 2:
         final data = _routeData;
-
         if (data == null) {
           return const SizedBox.shrink();
         }
 
         return RideDetailsModule(
           routeData: data,
-          onBack: () {
-            setState(() => _currentStep = 1);
-          },
+          onBack: () => setState(() => _currentStep = 1),
           onPublish: _publishRide,
           isPublishing: _isPublishing,
           loadVehicles: _loadRideVehicles,
@@ -267,13 +286,14 @@ class _OfferRideModalState extends State<OfferRideModal> {
     }
   }
 
-  // ================================================================
+  // ─────────────────────────────────────────────
   // LOAD VERIFIED VEHICLES
-  // ================================================================
+  // ─────────────────────────────────────────────
 
   Future<List<RideVehicleOption>> _loadRideVehicles() async {
     final vehicles = await VehicleService.instance.getMyVehicles();
 
+    // Only active vehicles with a verified RC can be offered for a ride.
     final availableVehicles = vehicles
         .where(
           (vehicle) =>
@@ -311,9 +331,9 @@ class _OfferRideModalState extends State<OfferRideModal> {
     return availableVehicles;
   }
 
-  // ================================================================
+  // ─────────────────────────────────────────────
   // ADD VEHICLE
-  // ================================================================
+  // ─────────────────────────────────────────────
 
   Future<void> _addVehicle() async {
     if (!mounted) return;
@@ -332,10 +352,6 @@ class _OfferRideModalState extends State<OfferRideModal> {
     );
   }
 
-  // ================================================================
-  // ROUTE FLOW
-  // ================================================================
-
   void _onRouteCalculated(RouteSelectionData data) {
     setState(() {
       _routeData = data;
@@ -346,40 +362,22 @@ class _OfferRideModalState extends State<OfferRideModal> {
   void _confirmRoute(RouteResult selectedRoute) {
     final data = _routeData;
 
-    if (data == null || selectedRoute.points.length < 2) {
+    if (data == null || selectedRoute.points.isEmpty) {
       _showError('Please calculate the route first.');
       return;
     }
 
     setState(() {
-      _routeData = data.copyWith(
-        route: selectedRoute,
-      );
+      _routeData = data.copyWith(route: selectedRoute);
       _currentStep = 2;
     });
   }
 
   // ================================================================
-  // BUILD ROUTE GEOMETRY
+  // BUILD CONFIRMED ROUTE PAYLOAD
   // ================================================================
 
-  List<Map<String, double>> _buildRouteGeometry(
-    RouteResult route,
-  ) {
-    return [
-      for (final point in route.points)
-        {
-          'latitude': point.latitude,
-          'longitude': point.longitude,
-        },
-    ];
-  }
-
-  // ================================================================
-  // BUILD STOPS
-  // ================================================================
-
-  List<Map<String, dynamic>> _buildStops(
+  List<Map<String, dynamic>> _buildStopsPayload(
     RouteSelectionData route,
   ) {
     return [
@@ -393,29 +391,21 @@ class _OfferRideModalState extends State<OfferRideModal> {
     ];
   }
 
-  // ================================================================
-  // BUILD ROUTE LEGS
-  // ================================================================
-
-  List<Map<String, dynamic>> _buildRouteLegs(
+  List<Map<String, dynamic>> _buildRouteLegsPayload(
     RouteSelectionData route,
   ) {
     return [
       for (final leg in route.routeLegs)
         {
           'leg_order': leg.order,
-
           'start_name': leg.startName,
           'start_lat': leg.start.latitude,
           'start_lng': leg.start.longitude,
-
           'end_name': leg.endName,
           'end_lat': leg.end.latitude,
           'end_lng': leg.end.longitude,
-
           'distance_meters': leg.distanceMeters,
           'duration_seconds': leg.durationSeconds,
-
           'geometry': [
             for (final point in leg.points)
               {
@@ -427,442 +417,154 @@ class _OfferRideModalState extends State<OfferRideModal> {
     ];
   }
 
-  // ================================================================
-  // VALIDATE ROUTE DATA BEFORE PUBLISHING
-  // ================================================================
-
-  String? _validateRouteData(
-    RouteSelectionData route,
-  ) {
-    if (route.route.points.length < 2) {
-      return 'The confirmed route geometry is incomplete.';
-    }
-
-    if (route.routeLegs.isEmpty) {
-      return 'The confirmed route legs are missing.';
-    }
-
-    for (int i = 0; i < route.route.points.length; i++) {
-      final point = route.route.points[i];
-
-      if (point.latitude < -90 ||
-          point.latitude > 90 ||
-          point.longitude < -180 ||
-          point.longitude > 180) {
-        return 'The confirmed route contains invalid coordinates.';
-      }
-    }
-
-    for (int i = 0; i < route.routeLegs.length; i++) {
-      final leg = route.routeLegs[i];
-
-      if (leg.order != i + 1) {
-        return 'The confirmed route legs are out of order.';
-      }
-
-      if (leg.points.length < 2) {
-        return 'Route leg ${i + 1} has incomplete geometry.';
-      }
-    }
-
-    for (int i = 0; i < route.stops.length; i++) {
-      final stop = route.stops[i];
-
-      if (stop.name.trim().isEmpty) {
-        return 'A route stop is missing its name.';
-      }
-
-      if (stop.position.latitude < -90 ||
-          stop.position.latitude > 90 ||
-          stop.position.longitude < -180 ||
-          stop.position.longitude > 180) {
-        return 'A route stop contains invalid coordinates.';
-      }
-    }
-
-    return null;
-  }
-
-  // ================================================================
-  // PUBLISH RIDE
-  // ================================================================
-
-  Future<void> _publishRide(
-    RideDetailsData details,
-  ) async {
+  Future<void> _publishRide(RideDetailsData details) async {
     final route = _routeData;
 
     if (route == null) {
-      _showError(
-        'Please confirm your route before publishing.',
-      );
+      _showError('Please confirm your route before publishing.');
       return;
     }
 
-    // ------------------------------------------------------------
-    // Timing validation
-    // ------------------------------------------------------------
-
-    if (!route.rideNow &&
-        !route.departure.isAfter(DateTime.now())) {
-      _showError(
-        'Please choose a future departure time.',
-      );
+    if (!route.departure.isAfter(DateTime.now()) && !route.rideNow) {
+      _showError('Please choose a future departure time.');
       return;
     }
 
-    // ------------------------------------------------------------
-    // Vehicle validation
-    // ------------------------------------------------------------
-
-    if (details.vehicleId <= 0) {
-      _showError(
-        'Please select a valid verified vehicle.',
-      );
-      return;
-    }
-
-    // ------------------------------------------------------------
-    // Terms validation
-    // ------------------------------------------------------------
-
-    if (!details.termsAccepted) {
-      _showError(
-        'Please accept the LiftOff ride-sharing terms.',
-      );
-      return;
-    }
-
-    // ------------------------------------------------------------
-    // Route validation
-    // ------------------------------------------------------------
-
-    final routeError = _validateRouteData(route);
-
-    if (routeError != null) {
-      _showError(routeError);
-      return;
-    }
-
-    // ------------------------------------------------------------
-    // Build finalized route snapshot
-    // ------------------------------------------------------------
-
-    final routeGeometry = _buildRouteGeometry(
-      route.route,
-    );
-
-    final routeLegs = _buildRouteLegs(
-      route,
-    );
-
-    final stops = _buildStops(
-      route,
-    );
-
-    // ------------------------------------------------------------
-    // Final safety checks
-    // ------------------------------------------------------------
-
-    if (routeGeometry.length < 2) {
-      _showError(
-        'The route geometry is incomplete.',
-      );
-      return;
-    }
-
-    if (routeLegs.isEmpty) {
-      _showError(
-        'No route legs are available for publishing.',
-      );
-      return;
-    }
-
-    for (final leg in routeLegs) {
-      final geometry = leg['geometry'];
-
-      if (geometry is! List || geometry.length < 2) {
-        _showError(
-          'One of the confirmed route legs has incomplete geometry.',
-        );
-        return;
-      }
-    }
-
-    // ------------------------------------------------------------
-    // Start publishing
-    // ------------------------------------------------------------
-
-    setState(() {
-      _isPublishing = true;
-    });
+    setState(() => _isPublishing = true);
 
     try {
-      // ----------------------------------------------------------
-      // FINAL API PAYLOAD
-      // ----------------------------------------------------------
-
       final payload = <String, dynamic>{
-        // ========================================================
-        // ORIGIN
-        // ========================================================
-
+        // ============================================================
+        // WORKING RIDE PAYLOAD
+        // ============================================================
+        //
+        // Keep the normal ride fields identical to the previously
+        // working /rides publishing flow.
         'origin_name': route.sourceName,
         'origin_lat': route.source.latitude,
         'origin_lng': route.source.longitude,
-
-        // ========================================================
-        // DESTINATION
-        // ========================================================
-
         'destination_name': route.destinationName,
         'destination_lat': route.destination.latitude,
         'destination_lng': route.destination.longitude,
-
-        // ========================================================
-        // TIMING
-        // ========================================================
-
-        'departure_time':
-            route.departure.toUtc().toIso8601String(),
-
+        'departure_time': route.departure.toUtc().toIso8601String(),
         'ride_now': route.rideNow,
-
-        // ========================================================
-        // SEATS
-        // ========================================================
-
-        // Module 3 already restricts this to:
-        //
-        // vehicle.seatingCapacity - 1
-        //
         'available_seats': details.seats,
 
-        // ========================================================
-        // NORMALIZED VEHICLE
-        // ========================================================
+        // ============================================================
+        // CONFIRMED ROUTE SNAPSHOT
+        // ============================================================
+        //
+        // These values come from the final route selected in
+        // RouteConfirmationModule. Do NOT recalculate the route here.
+        //
+        // IMPORTANT:
+        // RouteLegData.toJson() is the frontend route-model format.
+        // The /rides API expects a different flat route-leg schema,
+        // so route legs are mapped explicitly below.
+        'route_distance_meters': route.route.distanceMeters,
+        'route_duration_seconds': route.route.durationSeconds,
+        'route_geometry': [
+          for (final point in route.route.points)
+            {
+              'latitude': point.latitude,
+              'longitude': point.longitude,
+            },
+        ],
+        'stops': _buildStopsPayload(route),
+        'route_legs': _buildRouteLegsPayload(route),
 
-        // The backend resolves model, registration number,
-        // color, RC and ownership from this vehicle ID.
+        // ============================================================
+        // VERIFIED VEHICLE
+        // ============================================================
+        //
+        // The vehicle is selected from the user's verified vehicles.
+        // The backend validates ownership and verification.
         'vehicle_id': details.vehicleId,
+        'vehicle_model': details.vehicleModel,
+        'vehicle_number': details.vehicleNumber,
+        'vehicle_color': details.vehicleColor,
 
-        // ========================================================
-        // FINALIZED COMPLETE ROUTE
-        // ========================================================
-
-        'route_distance_meters':
-            route.route.distanceMeters,
-
-        'route_duration_seconds':
-            route.route.durationSeconds,
-
-        'route_geometry':
-            routeGeometry,
-
-        // ========================================================
-        // ROUTE STOPS
-        // ========================================================
-
-        'stops': stops,
-
-        // ========================================================
-        // ROUTE LEGS
-        // ========================================================
-
-        'route_legs': routeLegs,
-
-        // ========================================================
-        // PASSENGER PREFERENCES
-        // ========================================================
-
+        // Passenger preferences.
         'is_women_only': details.womenOnly,
-
         'democratic_consent': details.strictConsent,
 
-        // ========================================================
-        // ADVANCED PREFERENCES
-        // ========================================================
+        // Advanced ride preferences.
+        'flexible_pickup': details.flexiblePickup,
+        'allow_luggage': details.allowLuggage,
+        'allow_pets': details.allowPets,
+        'allow_music': details.allowMusic,
+        'is_ac': details.isAc,
+        'additional_notes': details.additionalNotes,
 
-        'flexible_pickup':
-            details.flexiblePickup,
-
-        'allow_luggage':
-            details.allowLuggage,
-
-        'allow_pets':
-            details.allowPets,
-
-        'allow_music':
-            details.allowMusic,
-
-        'is_ac':
-            details.isAc,
-
-        'additional_notes':
-            details.additionalNotes,
-
-        // ========================================================
-        // TERMS
-        // ========================================================
-
-        'terms_accepted':
-            details.termsAccepted,
+        // Module 3 only records acceptance. The backend calculates the
+        // actual fare; the host never submits a fare.
+        'terms_accepted': details.termsAccepted,
       };
 
-      // ----------------------------------------------------------
-      // DEBUG INFORMATION
-      // ----------------------------------------------------------
-
       debugPrint(
-        'LiftOff: Preparing finalized ride payload.',
+        'OfferRideModal: Publishing ride payload: $payload',
       );
-
-      debugPrint(
-        'LiftOff: origin='
-        '${route.sourceName}',
-      );
-
-      debugPrint(
-        'LiftOff: destination='
-        '${route.destinationName}',
-      );
-
-      debugPrint(
-        'LiftOff: rideNow='
-        '${route.rideNow}',
-      );
-
-      debugPrint(
-        'LiftOff: departure='
-        '${route.departure.toUtc().toIso8601String()}',
-      );
-
-      debugPrint(
-        'LiftOff: vehicleId='
-        '${details.vehicleId}',
-      );
-
-      debugPrint(
-        'LiftOff: availableSeats='
-        '${details.seats}',
-      );
-
-      debugPrint(
-        'LiftOff: routePoints='
-        '${routeGeometry.length}',
-      );
-
-      debugPrint(
-        'LiftOff: routeDistance='
-        '${route.route.distanceMeters} m',
-      );
-
-      debugPrint(
-        'LiftOff: routeDuration='
-        '${route.route.durationSeconds} sec',
-      );
-
-      debugPrint(
-        'LiftOff: routeLegs='
-        '${routeLegs.length}',
-      );
-
-      debugPrint(
-        'LiftOff: stops='
-        '${stops.length}',
-      );
-
-      debugPrint(
-        'OfferRideModal: Publishing ride payload: '
-        '$payload',
-      );
-
-      // ----------------------------------------------------------
-      // POST /rides
-      // ----------------------------------------------------------
 
       await ApiClient.instance.post(
         ApiEndpoints.rides,
         body: payload,
       );
 
-      // ----------------------------------------------------------
-      // SUCCESS
-      // ----------------------------------------------------------
-
-      // Clear saved route-search draft ONLY after successful
-      // backend publishing.
+      // Clear the saved route-search draft ONLY after the Publish action
+      // has succeeded. Going back between steps does not clear it.
       RouteSelectionModule.clearSavedSearch();
 
       if (!mounted) return;
 
-      setState(() {
-        _isPublishing = false;
-      });
-
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Ride published successfully.',
-          ),
+          content: Text('Ride published successfully.'),
           behavior: SnackBarBehavior.floating,
         ),
       );
 
       Navigator.of(context).pop(true);
     } on ApiException catch (e) {
-      debugPrint(
-        'OfferRideModal API error: ${e.message}',
-      );
+      debugPrint('OfferRideModal API error: ${e.message}');
 
       if (!mounted) return;
 
-      setState(() {
-        _isPublishing = false;
-      });
-
-      _showError(
-        'Failed to publish ride: ${e.message}',
-      );
+      setState(() => _isPublishing = false);
+      _showError('Failed to publish ride: ${e.message}');
     } catch (e) {
-      debugPrint(
-        'OfferRideModal publish error: $e',
-      );
+      debugPrint('OfferRideModal publish error: $e');
 
       if (!mounted) return;
 
-      setState(() {
-        _isPublishing = false;
-      });
-
-      _showError(
-        'Unable to publish the ride. Please try again.',
-      );
+      setState(() => _isPublishing = false);
+      _showError('Unable to publish the ride. Please try again.');
     }
   }
 
-  // ================================================================
-  // CLOSE
-  // ================================================================
-
+  /// The X/Cut button is the other intentional point where the saved
+  /// RouteSelectionModule search is deleted.
   void _closeModalAndClearDraft() {
     RouteSelectionModule.clearSavedSearch();
-
     Navigator.of(context).pop();
   }
-
-  // ================================================================
-  // ERROR
-  // ================================================================
 
   void _showError(String message) {
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    // Floating SnackBars can be laid out outside the available viewport
+    // while this modal is above the Android IME. Use a fixed SnackBar here
+    // so an API/validation error cannot trigger:
+    // "Floating SnackBar presented off screen."
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.fixed,
+        ),
+      );
   }
 }

@@ -3,15 +3,579 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 import '../../../core/data/mock_data.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/services/vehicle_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
+import '../../auth/screens/trust_vault_screen.dart';
+import '../../auth/screens/vehicle_rc_verification_screen.dart';
+import '../widgets/activity_widget.dart';
+import '../widgets/personal_information_widget.dart';
+import '../widgets/verification_widget.dart';
+import '../widgets/notification_page.dart';
+import '../widgets/support_page.dart';
 
-class ProfileScreen extends StatelessWidget {
+/// LiftOff — Profile Screen
+///
+/// Displays:
+/// - User profile information
+/// - Personal information
+/// - Phone verification
+/// - Aadhaar verification
+/// - Driving licence verification
+/// - Vehicle RC verification
+/// - Vehicles
+/// - Activity statistics
+/// - Settings
+/// - Logout
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  bool _isRefreshing = false;
+  bool _isLoggingOut = false;
+  bool _isLoadingVehicles = false;
+
+  List<ProfileVehicle> _vehicles = const <ProfileVehicle>[];
+  String? _maskedDrivingLicence;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfileData();
+  }
+
+  // ─────────────────────────────────────────────
+  // INITIAL PROFILE DATA
+  // ─────────────────────────────────────────────
+
+  Future<void> _loadProfileData() async {
+    await Future.wait<void>([
+      _refreshBackendProfile(showError: false),
+      _loadVehicles(showError: false),
+    ]);
+  }
+
+  // ─────────────────────────────────────────────
+  // BACKEND PROFILE
+  // ─────────────────────────────────────────────
+
+  Future<void> _refreshBackendProfile({
+    bool showError = true,
+  }) async {
+    try {
+      await AuthService.instance.getUserProfile();
+
+      // The existing user-profile response already contains the safe,
+      // masked driving-licence value. Do not call a second verification
+      // endpoint just to fetch the masked value.
+      final profile = AuthService.instance.currentProfile;
+
+      if (!mounted) return;
+
+      setState(() {
+        _maskedDrivingLicence =
+            profile?.maskedDrivingLicence;
+      });
+    } catch (error) {
+      if (showError && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not refresh profile: $error',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // VEHICLES
+  // ─────────────────────────────────────────────
+
+  Future<void> _loadVehicles({
+    bool showError = true,
+  }) async {
+    if (_isLoadingVehicles) return;
+
+    if (mounted) {
+      setState(() => _isLoadingVehicles = true);
+    }
+
+    try {
+      final vehicles =
+          await VehicleService.instance.getMyVehicles();
+
+      final mapped = vehicles
+          .map(
+            (vehicle) => ProfileVehicle(
+              id: vehicle.id,
+              vehicleModel: vehicle.vehicleModel,
+              vehicleColor: vehicle.vehicleColor,
+              registrationNumber:
+                  vehicle.registrationNumber,
+
+              // Module 3 uses subtype as its displayed vehicle type.
+              vehicleType: vehicle.vehicleSubtype,
+              vehicleSubtype: vehicle.vehicleSubtype,
+              seatingCapacity: vehicle.seatingCapacity,
+              verified: vehicle.rcVerified,
+              isActive: vehicle.isActive,
+            ),
+          )
+          .toList(growable: false);
+
+      if (!mounted) return;
+
+      setState(() {
+        _vehicles = mapped;
+        _isLoadingVehicles = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() => _isLoadingVehicles = false);
+
+      if (showError) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not load vehicles: $error',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // REFRESH PROFILE
+  // ─────────────────────────────────────────────
+
+  Future<void> _refreshProfile() async {
+    if (_isRefreshing) return;
+
+    setState(() => _isRefreshing = true);
+
+    try {
+      await _loadProfileData();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Profile refreshed.'),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not refresh profile: $error',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshing = false);
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // TRUST VAULT
+  // ─────────────────────────────────────────────
+
+  Future<void> _openTrustVault() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const TrustVaultScreen(),
+      ),
+    );
+
+    if (!mounted) return;
+
+    await _loadProfileData();
+  }
+
+  // ─────────────────────────────────────────────
+  // ADD / VERIFY VEHICLE
+  // ─────────────────────────────────────────────
+
+  Future<void> _openAddVehicleFlow() async {
+    final result = await Navigator.of(context).push<Object?>(
+      MaterialPageRoute(
+        builder: (_) =>
+            const VehicleRcVerificationScreen(),
+      ),
+    );
+
+    if (!mounted) return;
+
+    // Vehicle verification screen may return a UserProfile
+    // in the current implementation. The vehicle list itself
+    // is always re-read from DB.
+    if (result != null) {
+      await _refreshBackendProfile(
+        showError: false,
+      );
+    }
+
+    await _loadVehicles();
+  }
+
+  // ─────────────────────────────────────────────
+  // PHONE VERIFICATION
+  // ─────────────────────────────────────────────
+
+  /// Sends a phone verification OTP through Supabase.
+  ///
+  /// The actual SMS delivery and OTP generation are handled
+  /// by Supabase and its configured SMS provider.
+  Future<bool> _sendPhoneOtp() async {
+    final profile =
+        AuthService.instance.currentProfile;
+
+    final phoneNumber = profile?.phoneNumber;
+
+    if (phoneNumber == null ||
+        phoneNumber.trim().isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Please add a phone number before verifying.',
+            ),
+          ),
+        );
+      }
+
+      return false;
+    }
+
+    try {
+      await AuthService.instance
+          .sendPhoneVerificationOtp(
+        phoneNumber,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'OTP sent to $phoneNumber',
+            ),
+          ),
+        );
+      }
+
+      return true;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not send OTP: $error',
+            ),
+          ),
+        );
+      }
+
+      return false;
+    }
+  }
+
+  /// Verifies the OTP and synchronizes the result with
+  /// the LiftOff backend.
+  ///
+  /// DEVELOPMENT MODE:
+  /// Any 6-digit OTP is accepted locally, then the
+  /// development backend endpoint sets:
+  ///
+  ///     users.phone_number = <phone>
+  ///     users.phone_verified = true
+  ///
+  /// REAL MODE:
+  /// Supabase verifies the OTP first. AuthService then
+  /// synchronizes the verified Supabase phone state
+  /// with the LiftOff backend.
+  Future<bool> _verifyPhoneOtp(String otp) async {
+    final profile =
+        AuthService.instance.currentProfile;
+
+    final phoneNumber = profile?.phoneNumber;
+
+    if (phoneNumber == null ||
+        phoneNumber.trim().isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Phone number is not available.',
+            ),
+          ),
+        );
+      }
+
+      return false;
+    }
+
+    try {
+      debugPrint(
+        'Starting complete phone verification flow...',
+      );
+
+      // IMPORTANT:
+      // Do not call verifyPhoneOtp() directly here.
+      //
+      // verifyPhoneOtp() only verifies/accepts the OTP.
+      // verifyPhoneAndRefreshProfile() also performs the
+      // backend synchronization and refreshes the profile.
+      final updatedProfile =
+          await AuthService.instance
+              .verifyPhoneAndRefreshProfile(
+        phoneNumber: phoneNumber,
+        otp: otp,
+      );
+
+      debugPrint(
+        'Phone verification backend result: '
+        'phone=${updatedProfile.phoneNumber}, '
+        'verified=${updatedProfile.phoneVerified}',
+      );
+
+      // Refresh the screen from the backend response.
+      //
+      // This is important because ProfileScreen derives
+      // phoneVerified from AuthService.currentProfile.
+      await _refreshBackendProfile(
+        showError: false,
+      );
+
+      if (!mounted) {
+        return updatedProfile.phoneVerified;
+      }
+
+      if (updatedProfile.phoneVerified) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Phone number verified successfully.',
+            ),
+          ),
+        );
+
+        return true;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'OTP was accepted, but phone verification '
+            'could not be synchronized.',
+          ),
+        ),
+      );
+
+      return false;
+    } catch (error) {
+      debugPrint(
+        '❌ Complete phone verification failed: $error',
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Invalid OTP or verification failed: $error',
+            ),
+          ),
+        );
+      }
+
+      return false;
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // LOGOUT
+  // ─────────────────────────────────────────────
+
+  Future<void> _confirmLogout() async {
+    if (_isLoggingOut) return;
+
+    final shouldLogout =
+        await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text(
+          'Are you sure you want to log out of LiftOff?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(context).pop(true),
+            child: const Text('Log Out'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldLogout != true || !mounted) {
+      return;
+    }
+
+    setState(() => _isLoggingOut = true);
+
+    try {
+      await AuthService.instance.signOut();
+
+      if (!mounted) return;
+
+      Navigator.of(context).popUntil(
+        (route) => route.isFirst,
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not log out: $error',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoggingOut = false);
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // ABOUT LIFTOFF
+  // ─────────────────────────────────────────────
+
+  Future<void> _showAboutLiftOff() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: AppColors.white,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            20,
+            8,
+            20,
+            24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: [
+              Text(
+                'About LiftOff',
+                style: AppTextStyles.h3.copyWith(
+                  color: AppColors.midnightBlue,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'LiftOff is a smart ride-sharing platform '
+                'designed to help travellers and hosts '
+                'connect for shared journeys.',
+                style: AppTextStyles.body.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'The app brings trip planning, route '
+                'selection, vehicle verification and ride '
+                'management together in one place.',
+                style: AppTextStyles.body.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryTealSurface,
+                  borderRadius:
+                      BorderRadius.circular(16),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.verified_rounded,
+                      color:
+                          AppColors.primaryTealDark,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'LiftOff uses verification and '
+                        'profile information to support a '
+                        'more trusted ride-sharing experience.',
+                        style:
+                            AppTextStyles.caption.copyWith(
+                          color:
+                              AppColors.midnightBlue,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Version 1.0.0',
+                style:
+                    AppTextStyles.caption.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () =>
+                      Navigator.of(context).pop(),
+                  child: const Text('Close'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────
+
+  @override
   Widget build(BuildContext context) {
-    final profile = AuthService.instance.currentProfile;
+    final profile =
+        AuthService.instance.currentProfile;
 
     final avatarUrl = profile?.avatarUrl;
 
@@ -21,17 +585,28 @@ class ProfileScreen extends StatelessWidget {
 
     final email = profile?.email ?? '';
 
-    final initial =
-        name.isNotEmpty ? name[0].toUpperCase() : 'U';
+    final phoneNumber =
+        profile?.phoneNumber;
 
-    final isAadhaarVerified =
+    final isPhoneVerified =
+        profile?.phoneVerified ?? false;
+
+    final initial =
+        name.isNotEmpty
+            ? name[0].toUpperCase()
+            : 'U';
+
+    final aadhaarVerified =
         profile?.aadhaarVerified ?? false;
 
-    final isDlVerified =
+    final dlVerified =
         profile?.dlVerified ?? false;
 
-    final isRcVerified =
-        profile?.vehicleRcVerified ?? false;
+    final vehicleRcVerified =
+        (profile?.vehicleRcVerified ?? false) ||
+            _vehicles.any(
+              (vehicle) => vehicle.verified,
+            );
 
     final rides =
         profile?.sharedCommutesCount ?? 0;
@@ -43,13 +618,34 @@ class ProfileScreen extends StatelessWidget {
         profile?.co2SavedKg ?? 0.0;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F9FA),
-
+      backgroundColor:
+          const Color(0xFFF7F9FA),
       appBar: AppBar(
         elevation: 0,
         backgroundColor: AppColors.white,
-        surfaceTintColor: Colors.transparent,
+        surfaceTintColor:
+            Colors.transparent,
         centerTitle: false,
+        actions: [
+          IconButton(
+            tooltip: 'Refresh profile',
+            onPressed: _isRefreshing
+                ? null
+                : _refreshProfile,
+            icon: _isRefreshing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child:
+                        CircularProgressIndicator(
+                      strokeWidth: 2,
+                    ),
+                  )
+                : const Icon(
+                    Icons.refresh_rounded,
+                  ),
+          ),
+        ],
         title: Text(
           'My Profile',
           style: AppTextStyles.h3.copyWith(
@@ -58,128 +654,87 @@ class ProfileScreen extends StatelessWidget {
           ),
         ),
       ),
-
       body: SafeArea(
         top: false,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding:
+              const EdgeInsets.all(16),
           children: [
-
-            // =====================================================
+            // ─────────────────────────────────
             // PROFILE HEADER
-            // =====================================================
+            // ─────────────────────────────────
 
             Container(
-              padding: const EdgeInsets.all(20),
+              padding:
+                  const EdgeInsets.all(20),
               decoration: BoxDecoration(
                 color: AppColors.white,
-                borderRadius: BorderRadius.circular(24),
+                borderRadius:
+                    BorderRadius.circular(24),
                 boxShadow: const [
                   BoxShadow(
-                    color: AppColors.shadowLight,
+                    color:
+                        AppColors.shadowLight,
                     blurRadius: 16,
                     offset: Offset(0, 6),
                   ),
                 ],
               ),
-
               child: Column(
                 children: [
-
-                  // =================================================
-                  // AVATAR
-                  // =================================================
-
                   Stack(
                     children: [
-
                       Container(
                         width: 96,
                         height: 96,
-                        decoration: BoxDecoration(
+                        decoration:
+                            BoxDecoration(
                           gradient:
                               AppColors.navyGradient,
-                          shape: BoxShape.circle,
+                          shape:
+                              BoxShape.circle,
                         ),
-
                         child: ClipOval(
-                          child:
-                              avatarUrl != null &&
-                                      avatarUrl.isNotEmpty
-                                  ? CachedNetworkImage(
-                                      imageUrl:
-                                          avatarUrl,
-
-                                      width: 96,
-                                      height: 96,
-
-                                      fit:
-                                          BoxFit.cover,
-
-                                      fadeInDuration:
-                                          const Duration(
-                                        milliseconds:
-                                            150,
-                                      ),
-
-                                      placeholder: (
-                                        context,
-                                        url,
-                                      ) {
-                                        return Center(
-                                          child: Text(
-                                            initial,
-                                            style:
-                                                AppTextStyles.h1.copyWith(
-                                              color:
-                                                  AppColors.primaryTeal,
-                                              fontWeight:
-                                                  FontWeight.w800,
-                                                  fontSize: 42,
-                                            ),
-                                          ),
-                                        );
-                                      },
-
-                                      errorWidget: (
-                                        context,
-                                        url,
-                                        error,
-                                      ) {
-                                        return Center(
-                                          child: Text(
-                                            initial,
-                                            style:
-                                                AppTextStyles.h1.copyWith(
-                                              color:
-                                                  AppColors.primaryTeal,
-                                              fontWeight:
-                                                  FontWeight.w800,
-                                                  fontSize: 42,
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                    )
-                                  : Center(
-                                      child: Text(
+                          child: avatarUrl != null &&
+                                  avatarUrl.isNotEmpty
+                              ? CachedNetworkImage(
+                                  imageUrl:
+                                      avatarUrl,
+                                  width: 96,
+                                  height: 96,
+                                  fit: BoxFit.cover,
+                                  fadeInDuration:
+                                      const Duration(
+                                    milliseconds:
+                                        150,
+                                  ),
+                                  placeholder:
+                                      (
+                                    _,
+                                    __,
+                                  ) =>
+                                          _AvatarFallback(
+                                    initial:
                                         initial,
-                                        style:
-                                            AppTextStyles.h1.copyWith(
-                                          color:
-                                              AppColors.primaryTeal,
-                                          fontWeight:
-                                              FontWeight.w800,
-                                              fontSize: 42,
-                                        ),
-                                      ),
-                                    ),
+                                  ),
+                                  errorWidget:
+                                      (
+                                    _,
+                                    __,
+                                    ___,
+                                  ) =>
+                                          _AvatarFallback(
+                                    initial:
+                                        initial,
+                                  ),
+                                )
+                              : _AvatarFallback(
+                                  initial:
+                                      initial,
+                                ),
                         ),
                       ),
-
-                      // VERIFIED BADGE
-
-                      if (isAadhaarVerified)
+                      if (aadhaarVerified)
                         Positioned(
                           right: 0,
                           bottom: 0,
@@ -195,21 +750,19 @@ class ProfileScreen extends StatelessWidget {
                               shape:
                                   BoxShape.circle,
                             ),
-                            child: const Icon(
+                            child:
+                                const Icon(
                               Icons
                                   .check_circle_rounded,
-                              color:
-                                  AppColors
-                                      .verifiedGreen,
+                              color: AppColors
+                                  .verifiedGreen,
                               size: 24,
                             ),
                           ),
                         ),
                     ],
                   ),
-
                   const SizedBox(height: 14),
-
                   Text(
                     name,
                     style:
@@ -220,74 +773,122 @@ class ProfileScreen extends StatelessWidget {
                           FontWeight.w800,
                     ),
                   ),
-
-                  const SizedBox(height: 4),
-
-                  Text(
-                    email,
-                    style:
-                        AppTextStyles.body.copyWith(
-                      color:
-                          AppColors.textSecondary,
+                  if (email.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      email,
+                      style:
+                          AppTextStyles.body.copyWith(
+                        color:
+                            AppColors.textSecondary,
+                      ),
                     ),
-                  ),
-
+                  ],
+                  if (phoneNumber
+                          ?.isNotEmpty ==
+                      true) ...[
+                    const SizedBox(height: 5),
+                    Row(
+                      mainAxisSize:
+                          MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.phone_outlined,
+                          size: 15,
+                          color: isPhoneVerified
+                              ? AppColors
+                                  .verifiedGreen
+                              : AppColors
+                                  .textSecondary,
+                        ),
+                        const SizedBox(
+                          width: 5,
+                        ),
+                        Text(
+                          phoneNumber!,
+                          style:
+                              AppTextStyles
+                                  .caption
+                                  .copyWith(
+                            color: AppColors
+                                .textSecondary,
+                          ),
+                        ),
+                        const SizedBox(
+                          width: 6,
+                        ),
+                        Text(
+                          isPhoneVerified
+                              ? 'Verified'
+                              : 'Not verified',
+                          style:
+                              AppTextStyles
+                                  .caption
+                                  .copyWith(
+                            color:
+                                isPhoneVerified
+                                    ? AppColors
+                                        .verifiedGreen
+                                    : Colors.orange,
+                            fontWeight:
+                                FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 14),
-
-                  // ACCOUNT STATUS
-
                   Container(
                     padding:
                         const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 7,
                     ),
-                    decoration: BoxDecoration(
-                      color:
-                          isAadhaarVerified
-                              ? AppColors
-                                  .primaryTealSurface
-                              : Colors.orange
-                                  .withValues(
-                                  alpha: 0.12,
-                                ),
+                    decoration:
+                        BoxDecoration(
+                      color: aadhaarVerified
+                          ? AppColors
+                              .primaryTealSurface
+                          : Colors.orange
+                              .withValues(
+                              alpha: 0.12,
+                            ),
                       borderRadius:
                           BorderRadius.circular(
                         20,
                       ),
                     ),
-
                     child: Row(
                       mainAxisSize:
                           MainAxisSize.min,
                       children: [
-
                         Icon(
-                          isAadhaarVerified
+                          aadhaarVerified
                               ? Icons
                                   .verified_rounded
                               : Icons
                                   .pending_rounded,
                           size: 16,
-                          color:
-                              isAadhaarVerified
-                                  ? AppColors
-                                      .verifiedGreen
-                                  : Colors.orange,
+                          color: aadhaarVerified
+                              ? AppColors
+                                  .verifiedGreen
+                              : Colors.orange,
                         ),
-
-                        const SizedBox(width: 6),
-
+                        const SizedBox(
+                          width: 6,
+                        ),
                         Text(
-                          isAadhaarVerified
+                          aadhaarVerified
                               ? 'Verified Account'
                               : 'Verification Pending',
                           style:
-                              AppTextStyles.caption.copyWith(
+                              AppTextStyles
+                                  .caption
+                                  .copyWith(
                             fontWeight:
                                 FontWeight.w700,
                             color:
-                                isAadhaarVerified
+                                aadhaarVerified
                                     ? AppColors
                                         .primaryTealDark
                                     : Colors.orange,
@@ -300,169 +901,90 @@ class ProfileScreen extends StatelessWidget {
               ),
             ),
 
-            const SizedBox(height: 20),
+            // ─────────────────────────────────
+            // PERSONAL INFORMATION
+            // ─────────────────────────────────
 
-            // =====================================================
-            // ACCOUNT
-            // =====================================================
+            const SizedBox(height: 20),
 
             _buildSectionTitle(
-              'Account',
+              'Personal Information',
             ),
 
-            _ProfileCard(
-              children: [
+            PersonalInformationWidget(
+              name: name,
+              email: email,
+              phoneNumber: phoneNumber,
+              emailVerified:
+                  profile?.email != null,
+              phoneVerified:
+                  isPhoneVerified,
 
-                _ProfileTile(
-                  icon:
-                      Icons.person_outline_rounded,
-                  title:
-                      'Personal Information',
-                  subtitle:
-                      'Name and account details',
-                  onTap: () {},
-                ),
+              // Send OTP through Supabase.
+              onSendPhoneOtp:
+                  phoneNumber?.isNotEmpty ==
+                          true
+                      ? _sendPhoneOtp
+                      : null,
 
-                _ProfileDivider(),
-
-                _ProfileTile(
-                  icon:
-                      Icons.email_outlined,
-                  title:
-                      'Email',
-                  subtitle:
-                      email.isNotEmpty
-                          ? email
-                          : 'No email available',
-                  onTap: () {},
-                ),
-
-                _ProfileDivider(),
-
-                _ProfileTile(
-                  icon:
-                      Icons.lock_outline_rounded,
-                  title:
-                      'Security',
-                  subtitle:
-                      'Password and account security',
-                  onTap: () {},
-                ),
-              ],
+              // Verify OTP through Supabase.
+              onVerifyPhone:
+                  phoneNumber?.isNotEmpty ==
+                          true
+                      ? _verifyPhoneOtp
+                      : null,
             ),
+
+            // ─────────────────────────────────
+            // VERIFICATION
+            // ─────────────────────────────────
 
             const SizedBox(height: 20),
-
-            // =====================================================
-            // VERIFICATION
-            // =====================================================
 
             _buildSectionTitle(
               'Verification',
             ),
 
-            _ProfileCard(
-              children: [
-
-                _VerificationTile(
-                  icon:
-                      Icons.badge_outlined,
-                  title:
-                      'Aadhaar Verification',
-                  verified:
-                      isAadhaarVerified,
-                  subtitle:
-                      profile?.maskedAadhaar ??
-                          'Identity verification',
-                ),
-
-                _ProfileDivider(),
-
-                _VerificationTile(
-                  icon:
-                      Icons.credit_card_outlined,
-                  title:
-                      'Driving Licence',
-                  verified:
-                      isDlVerified,
-                  subtitle:
-                      'Driving licence verification',
-                ),
-
-                _ProfileDivider(),
-
-                _VerificationTile(
-                  icon:
-                      Icons.directions_car_outlined,
-                  title:
-                      'Vehicle RC',
-                  verified:
-                      isRcVerified,
-                  subtitle:
-                      'Vehicle registration verification',
-                ),
-              ],
+            VerificationWidget(
+              aadhaarVerified:
+                  aadhaarVerified,
+              maskedAadhaar:
+                  profile?.maskedAadhaar,
+              drivingLicenceVerified:
+                  dlVerified,
+              maskedDrivingLicence:
+                  _maskedDrivingLicence,
+              vehicleRcVerified:
+                  vehicleRcVerified,
+              vehicles: _vehicles,
+              isLoadingVehicles:
+                  _isLoadingVehicles,
+              onRefreshVehicles:
+                  _loadVehicles,
+              onOpenTrustVault:
+                  _openTrustVault,
+              onAddVehicle:
+                  _openAddVehicleFlow,
             ),
+
+            // ─────────────────────────────────
+            // ACTIVITY
+            // ─────────────────────────────────
 
             const SizedBox(height: 20),
 
-            // =====================================================
-            // YOUR ACTIVITY
-            // =====================================================
-
-            _buildSectionTitle(
-              'Your Activity',
+            ActivityWidget(
+              sharedRides: rides,
+              fuelRecovered:
+                  fuelRecovered,
+              co2Saved: co2Saved,
             ),
 
-            Row(
-              children: [
-
-                Expanded(
-                  child: _StatCard(
-                    icon:
-                        Icons.route_rounded,
-                    value:
-                        rides.toString(),
-                    label:
-                        'Shared Rides',
-                  ),
-                ),
-
-                const SizedBox(width: 10),
-
-                Expanded(
-                  child: _StatCard(
-                    icon:
-                        Icons
-                            .currency_rupee_rounded,
-                    value:
-                        fuelRecovered
-                            .toStringAsFixed(0),
-                    label:
-                        'Fuel Recovered',
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 10),
-
-            _StatCard(
-              icon:
-                  Icons.eco_rounded,
-              value:
-                  '${co2Saved.toStringAsFixed(1)} kg',
-              label:
-                  'CO₂ Saved',
-              fullWidth:
-                  true,
-            ),
-
-            const SizedBox(height: 20),
-
-            // =====================================================
+            // ─────────────────────────────────
             // SETTINGS
-            // =====================================================
+            // ─────────────────────────────────
+
+            const SizedBox(height: 20),
 
             _buildSectionTitle(
               'Settings',
@@ -470,71 +992,64 @@ class ProfileScreen extends StatelessWidget {
 
             _ProfileCard(
               children: [
-
                 _ProfileTile(
-                  icon:
-                      Icons
-                          .notifications_none_rounded,
-                  title:
-                      'Notifications',
+                  icon: Icons
+                      .notifications_none_rounded,
+                  title: 'Notifications',
                   subtitle:
                       'Manage notification preferences',
-                  onTap: () {},
+                  onTap: () =>
+                      NotificationPage.show(
+                    context,
+                  ),
                 ),
-
-                _ProfileDivider(),
-
+                const _ProfileDivider(),
                 _ProfileTile(
-                  icon:
-                      Icons.help_outline_rounded,
-                  title:
-                      'Help & Support',
+                  icon: Icons
+                      .help_outline_rounded,
+                  title: 'Help & Support',
                   subtitle:
                       'Get help with LiftOff',
-                  onTap: () {},
+                  onTap: () =>
+                      SupportPage.show(
+                    context,
+                  ),
                 ),
-
-                _ProfileDivider(),
-
+                const _ProfileDivider(),
                 _ProfileTile(
-                  icon:
-                      Icons.info_outline_rounded,
-                  title:
-                      'About LiftOff',
+                  icon: Icons
+                      .info_outline_rounded,
+                  title: 'About LiftOff',
                   subtitle:
                       'App information',
-                  onTap: () {},
+                  onTap:
+                      _showAboutLiftOff,
                 ),
               ],
             ),
 
+            // ─────────────────────────────────
+            // LOGOUT
+            // ─────────────────────────────────
+
             const SizedBox(height: 20),
 
-            // =====================================================
-            // LOGOUT
-            // =====================================================
-
             OutlinedButton.icon(
-              onPressed: () async {
-                // Connect AuthService logout here.
-              },
-
+              onPressed: _isLoggingOut
+                  ? null
+                  : _confirmLogout,
               icon: const Icon(
                 Icons.logout_rounded,
               ),
-
-              label: const Text(
-                'Log Out',
-              ),
-
+              label:
+                  const Text('Log Out'),
               style:
                   OutlinedButton.styleFrom(
                 foregroundColor:
                     Colors.red,
                 side:
                     const BorderSide(
-                  color:
-                      Colors.red,
+                  color: Colors.red,
                 ),
                 padding:
                     const EdgeInsets.symmetric(
@@ -557,9 +1072,9 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 
-  // =============================================================
+  // ─────────────────────────────────────────────
   // SECTION TITLE
-  // =============================================================
+  // ─────────────────────────────────────────────
 
   Widget _buildSectionTitle(
     String title,
@@ -584,12 +1099,44 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// AVATAR FALLBACK
+// ═══════════════════════════════════════════════════════════════
 
-// ===============================================================
+class _AvatarFallback
+    extends StatelessWidget {
+  final String initial;
+
+  const _AvatarFallback({
+    required this.initial,
+  });
+
+  @override
+  Widget build(
+    BuildContext context,
+  ) {
+    return Center(
+      child: Text(
+        initial,
+        style:
+            AppTextStyles.h1.copyWith(
+          color:
+              AppColors.primaryTeal,
+          fontWeight:
+              FontWeight.w800,
+          fontSize: 42,
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // PROFILE CARD
-// ===============================================================
+// ═══════════════════════════════════════════════════════════════
 
-class _ProfileCard extends StatelessWidget {
+class _ProfileCard
+    extends StatelessWidget {
   final List<Widget> children;
 
   const _ProfileCard({
@@ -601,43 +1148,29 @@ class _ProfileCard extends StatelessWidget {
     BuildContext context,
   ) {
     return Material(
-      color:
-          AppColors.white,
-
-      elevation:
-          3,
-
+      color: AppColors.white,
+      elevation: 3,
       shadowColor:
           AppColors.shadowLight,
-
       borderRadius:
-          BorderRadius.circular(
-        20,
-      ),
-
+          BorderRadius.circular(20),
       clipBehavior:
           Clip.antiAlias,
-
-      child: Column(
-        children:
-            children,
-      ),
+      child:
+          Column(children: children),
     );
   }
 }
 
-
-// ===============================================================
+// ═══════════════════════════════════════════════════════════════
 // PROFILE TILE
-// ===============================================================
+// ═══════════════════════════════════════════════════════════════
 
-class _ProfileTile extends StatelessWidget {
+class _ProfileTile
+    extends StatelessWidget {
   final IconData icon;
-
   final String title;
-
   final String subtitle;
-
   final VoidCallback onTap;
 
   const _ProfileTile({
@@ -652,291 +1185,68 @@ class _ProfileTile extends StatelessWidget {
     BuildContext context,
   ) {
     return ListTile(
-      onTap:
-          onTap,
-
+      onTap: onTap,
+      contentPadding:
+          const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 6,
+      ),
       leading: Container(
-        width:
-            42,
-
-        height:
-            42,
-
+        width: 42,
+        height: 42,
         decoration:
             BoxDecoration(
           color:
-              AppColors
-                  .primaryTealSurface,
+              AppColors.primaryTealSurface,
           borderRadius:
-              BorderRadius.circular(
-            12,
-          ),
+              BorderRadius.circular(12),
         ),
-
         child: Icon(
           icon,
           color:
-              AppColors
-                  .primaryTealDark,
+              AppColors.primaryTealDark,
         ),
       ),
-
       title: Text(
         title,
         style:
             AppTextStyles.label.copyWith(
+          color:
+              AppColors.midnightBlue,
           fontWeight:
               FontWeight.w700,
         ),
       ),
-
       subtitle: Text(
         subtitle,
-        maxLines:
-            1,
+        maxLines: 1,
         overflow:
             TextOverflow.ellipsis,
       ),
-
-      trailing:
-          const Icon(
+      trailing: const Icon(
         Icons.chevron_right_rounded,
       ),
     );
   }
 }
 
-
-// ===============================================================
-// VERIFICATION TILE
-// ===============================================================
-
-class _VerificationTile
-    extends StatelessWidget {
-  final IconData icon;
-
-  final String title;
-
-  final String subtitle;
-
-  final bool verified;
-
-  const _VerificationTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.verified,
-  });
-
-  @override
-  Widget build(
-    BuildContext context,
-  ) {
-    return ListTile(
-      leading:
-          Container(
-        width:
-            42,
-
-        height:
-            42,
-
-        decoration:
-            BoxDecoration(
-          color:
-              verified
-                  ? AppColors
-                      .primaryTealSurface
-                  : Colors.grey
-                      .withValues(
-                      alpha: 0.10,
-                    ),
-
-          borderRadius:
-              BorderRadius.circular(
-            12,
-          ),
-        ),
-
-        child:
-            Icon(
-          icon,
-          color:
-              verified
-                  ? AppColors
-                      .primaryTealDark
-                  : Colors.grey,
-        ),
-      ),
-
-      title:
-          Text(
-        title,
-        style:
-            AppTextStyles.label.copyWith(
-          fontWeight:
-              FontWeight.w700,
-        ),
-      ),
-
-      subtitle:
-          Text(
-        subtitle,
-      ),
-
-      trailing:
-          Icon(
-        verified
-            ? Icons.verified_rounded
-            : Icons.pending_outlined,
-
-        color:
-            verified
-                ? AppColors
-                    .verifiedGreen
-                : Colors.orange,
-      ),
-    );
-  }
-}
-
-
-// ===============================================================
-// DIVIDER
-// ===============================================================
+// ═══════════════════════════════════════════════════════════════
+// PROFILE DIVIDER
+// ═══════════════════════════════════════════════════════════════
 
 class _ProfileDivider
     extends StatelessWidget {
+  const _ProfileDivider();
+
   @override
   Widget build(
     BuildContext context,
   ) {
-    return Divider(
-      height:
-          1,
-
-      indent:
-          72,
-
+    return const Divider(
+      height: 1,
+      indent: 72,
       color:
           AppColors.borderGray,
-    );
-  }
-}
-
-
-// ===============================================================
-// STAT CARD
-// ===============================================================
-
-class _StatCard
-    extends StatelessWidget {
-  final IconData icon;
-
-  final String value;
-
-  final String label;
-
-  final bool fullWidth;
-
-  const _StatCard({
-    required this.icon,
-    required this.value,
-    required this.label,
-    this.fullWidth = false,
-  });
-
-  @override
-  Widget build(
-    BuildContext context,
-  ) {
-    return Container(
-      width:
-          fullWidth
-              ? double.infinity
-              : null,
-
-      padding:
-          const EdgeInsets.all(
-        16,
-      ),
-
-      decoration:
-          BoxDecoration(
-        color:
-            AppColors.white,
-
-        borderRadius:
-            BorderRadius.circular(
-          18,
-        ),
-
-        boxShadow:
-            const [
-          BoxShadow(
-            color:
-                AppColors.shadowLight,
-            blurRadius:
-                10,
-            offset:
-                Offset(
-              0,
-              3,
-            ),
-          ),
-        ],
-      ),
-
-      child:
-          Row(
-        mainAxisAlignment:
-            MainAxisAlignment.center,
-
-        children: [
-
-          Icon(
-            icon,
-            color:
-                AppColors
-                    .primaryTealDark,
-          ),
-
-          const SizedBox(
-            width:
-                10,
-          ),
-
-          Column(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
-
-            children: [
-
-              Text(
-                value,
-                style:
-                    AppTextStyles.h3.copyWith(
-                  fontWeight:
-                      FontWeight.w800,
-                  color:
-                      AppColors
-                          .midnightBlue,
-                ),
-              ),
-
-              Text(
-                label,
-                style:
-                    AppTextStyles.caption.copyWith(
-                  color:
-                      AppColors
-                          .textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
     );
   }
 }

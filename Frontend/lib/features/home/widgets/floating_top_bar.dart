@@ -489,10 +489,10 @@ class FloatingTopBar extends StatelessWidget {
                                             url,
                                             error,
                                           ) {
-                                            debugPrint(
-                                              'Avatar loading failed: '
-                                              '$error',
-                                            );
+                                            // debugPrint(
+                                            //   'Avatar loading failed: '
+                                            //   '$error',
+                                            // );
 
                                             return _AvatarInitial(
                                               initial:

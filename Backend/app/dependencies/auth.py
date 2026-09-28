@@ -17,6 +17,9 @@ async def get_current_user(
     """
     Extract the Supabase JWT from the Authorization header
     and verify the authenticated user with Supabase.
+
+    This dependency is responsible only for authentication.
+    It does not modify the local LiftOff user profile.
     """
 
     print("\n========== JWT AUTHENTICATION STARTED ==========")
@@ -77,6 +80,17 @@ async def get_current_user(
         print(f"User ID: {user.id}")
         print(f"Email: {user.email}")
         print(f"Phone: {user.phone}")
+
+        # Supabase may expose the timestamp at which the phone
+        # number was confirmed. This is only authentication/debug
+        # information here; local User.phone_verified is synchronized
+        # by the profile/authentication flow.
+        phone_confirmed_at = getattr(
+            user,
+            "phone_confirmed_at",
+            None,
+        )
+        print(f"Phone confirmed at: {phone_confirmed_at}")
 
         print("\n---------- USER METADATA ----------")
         print(user.user_metadata)

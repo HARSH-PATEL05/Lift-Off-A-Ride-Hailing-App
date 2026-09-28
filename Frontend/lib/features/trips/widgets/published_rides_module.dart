@@ -268,6 +268,15 @@ class _RideListSegment extends StatelessWidget {
     return '$hour:$minute $period';
   }
 
+  static String _formatDateTime(DateTime dt) {
+    final local = dt.toLocal();
+    const months = <String>[
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${local.day} ${months[local.month - 1]} • ${_formatTime(local)}';
+  }
+
   Color _statusBackground(String status) {
     switch (status) {
       case 'active':
@@ -328,16 +337,16 @@ class _RideListSegment extends StatelessWidget {
         final isCancelable = showCancelButton && _canCancelRide(ride);
 
         return Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
           decoration: BoxDecoration(
             color: AppColors.white,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(color: AppColors.borderGray),
             boxShadow: const [
               BoxShadow(
                 color: AppColors.shadowLight,
-                blurRadius: 8,
-                offset: Offset(0, 2),
+                blurRadius: 10,
+                offset: Offset(0, 3),
               ),
             ],
           ),
@@ -345,15 +354,16 @@ class _RideListSegment extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
+                      horizontal: 10,
+                      vertical: 5,
                     ),
                     decoration: BoxDecoration(
                       color: _statusBackground(status),
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
                       status.toUpperCase(),
@@ -365,68 +375,146 @@ class _RideListSegment extends StatelessWidget {
                   ),
                   const Spacer(),
                   Text(
-                    'Departure: ${_formatTime(ride.departureTime)}',
-                    style: AppTextStyles.label.copyWith(fontSize: 12),
+                    _formatDateTime(ride.departureTime),
+                    style: AppTextStyles.label.copyWith(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Icon(
+                      Icons.radio_button_checked_rounded,
+                      size: 21,
+                      color: AppColors.primaryTeal,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      ride.originName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.h3.copyWith(
+                        fontSize: 15,
+                        height: 1.25,
+                      ),
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              Text(
-                '${ride.originName} → ${ride.destinationName}',
-                style: AppTextStyles.h3.copyWith(fontSize: 15),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Icon(
+                      Icons.location_on_rounded,
+                      size: 21,
+                      color: AppColors.midnightBlue,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      ride.destinationName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.label.copyWith(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                        height: 1.25,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 4),
-              Text(
-                '${ride.vehicleModel ?? "Vehicle"} '
-                '(${ride.vehicleNumber ?? "Registered"}) '
-                '• ₹${ride.farePerSeat.toInt()}/seat',
-                style: AppTextStyles.caption,
-              ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               const Divider(height: 1, color: AppColors.borderGray),
-              const SizedBox(height: 10),
+              const SizedBox(height: 12),
               Row(
                 children: [
                   const Icon(
-                    Icons.event_seat_rounded,
-                    size: 16,
-                    color: AppColors.midnightBlue,
+                    Icons.directions_car_filled_rounded,
+                    size: 19,
+                    color: AppColors.primaryTealDark,
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      ride.vehicleModel ?? 'Vehicle',
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyles.caption.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.midnightBlue,
+                      ),
+                    ),
+                  ),
+                  const Icon(
+                    Icons.people_alt_rounded,
+                    size: 19,
+                    color: AppColors.primaryTealDark,
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    '${ride.availableSeats} seats available',
+                    '${ride.availableSeats} ${ride.availableSeats == 1 ? 'seat' : 'seats'}',
                     style: AppTextStyles.caption.copyWith(
                       fontWeight: FontWeight.w700,
                       color: AppColors.midnightBlue,
                     ),
                   ),
-                  const Spacer(),
-                  if (isCancelable)
-                    OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.redAccent,
-                        side: const BorderSide(color: Colors.redAccent),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      onPressed: () => onCancel?.call(ride),
-                      child: Text(
-                        'Cancel Ride',
-                        style: AppTextStyles.caption.copyWith(
-                          color: Colors.redAccent,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+                  const SizedBox(width: 14),
+                  const Icon(
+                    Icons.currency_rupee_rounded,
+                    size: 19,
+                    color: AppColors.primaryTealDark,
+                  ),
+                  const SizedBox(width: 2),
+                  Text(
+                    '₹${ride.farePerSeat.toInt()}/seat',
+                    style: AppTextStyles.caption.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.midnightBlue,
                     ),
+                  ),
                 ],
               ),
+              if (isCancelable) ...[
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.redAccent,
+                      side: const BorderSide(color: Colors.redAccent),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 7,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                    ),
+                    onPressed: () => onCancel?.call(ride),
+                    child: Text(
+                      'Cancel Ride',
+                      style: AppTextStyles.caption.copyWith(
+                        color: Colors.redAccent,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         );

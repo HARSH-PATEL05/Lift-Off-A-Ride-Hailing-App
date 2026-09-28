@@ -48,7 +48,6 @@ class _StopEditor {
 /// Preserves the existing Home search UI and autocomplete behavior while
 /// adding dynamic intermediate stops.
 class SearchBarWidget extends StatefulWidget {
-  final ValueChanged<String>? onFilterChanged;
   final String? initialSource;
   final String? initialDestination;
   final List<SearchRouteStop> initialStops;
@@ -77,7 +76,6 @@ class SearchBarWidget extends StatefulWidget {
 
   const SearchBarWidget({
     super.key,
-    this.onFilterChanged,
     this.initialSource,
     this.initialDestination,
     this.initialStops = const [],
@@ -122,15 +120,6 @@ class _SearchBarWidgetState extends State<SearchBarWidget>
   bool _isApplyingSelection = false;
   PlaceSuggestion? _selectedSource;
   PlaceSuggestion? _selectedDestination;
-
-  String _selectedFilter = 'All';
-  final List<String> _filters = [
-    'All',
-    'Today (Evening)',
-    'Verified Hosts Only 🛡️',
-    'Women-Only 👩',
-    'Strict Consent 🗳️',
-  ];
 
   bool _localSearching = false;
 
@@ -966,42 +955,6 @@ class _SearchBarWidgetState extends State<SearchBarWidget>
             ]),
           ),
         ],
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 36,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            itemCount: _filters.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (_, index) {
-              final filter = _filters[index];
-              final selected = filter == _selectedFilter;
-              return GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  HapticFeedback.selectionClick();
-                  setState(() => _selectedFilter = filter);
-                  widget.onFilterChanged?.call(filter);
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  padding: EdgeInsets.symmetric(horizontal: _isAndroid ? 12 : 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: selected ? AppColors.midnightBlue : AppColors.white,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: selected ? AppColors.midnightBlue : AppColors.borderGray, width: 1.5),
-                  ),
-                  child: Center(child: Text(filter, style: AppTextStyles.caption.copyWith(
-                    color: selected ? AppColors.white : AppColors.deepSlate,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    fontSize: _isAndroid ? 11 : 12,
-                  ))),
-                ),
-              );
-            },
-          ),
-        ),
       ],
     );
   }

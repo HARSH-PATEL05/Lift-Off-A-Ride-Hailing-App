@@ -124,6 +124,8 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
   bool _isAc = true;
 
   final _notesController = TextEditingController();
+  final _notesFocusNode = FocusNode();
+  final _notesFieldKey = GlobalKey();
 
   bool _termsAccepted = false;
   bool _showPreview = false;
@@ -163,17 +165,27 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
 
   bool _isTwoWheeler(RideVehicleOption vehicle) {
     final type = vehicle.vehicleType.trim().toUpperCase();
-    return type == 'BIKE' || type == 'SCOOTY' || type == 'SCOOTER' || type.contains('2 WHEELER');
+    return type == 'BIKE' ||
+        type == 'SCOOTY' ||
+        type == 'SCOOTER' ||
+        type.contains('2 WHEELER');
   }
 
   bool _isThreeWheeler(RideVehicleOption vehicle) {
     final type = vehicle.vehicleType.trim().toUpperCase();
-    return type == 'AUTO' || type == 'E-RICKSHAW' || type == 'E RICKSHAW' || type == 'TOTO' || type == 'RICKSHAW' || type.contains('3 WHEELER');
+    return type == 'AUTO' ||
+        type == 'E-RICKSHAW' ||
+        type == 'E RICKSHAW' ||
+        type == 'TOTO' ||
+        type == 'RICKSHAW' ||
+        type.contains('3 WHEELER');
   }
 
-  bool _supportsAc(RideVehicleOption vehicle) => !_isTwoWheeler(vehicle) && !_isThreeWheeler(vehicle);
+  bool _supportsAc(RideVehicleOption vehicle) =>
+      !_isTwoWheeler(vehicle) && !_isThreeWheeler(vehicle);
 
-  bool _supportsMusic(RideVehicleOption vehicle) => !_isTwoWheeler(vehicle);
+  bool _supportsMusic(RideVehicleOption vehicle) =>
+      !_isTwoWheeler(vehicle);
 
   void _applyVehicleSelection(RideVehicleOption vehicle) {
     final maxSeats = vehicle.seatingCapacity > 1
@@ -203,6 +215,50 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
   void initState() {
     super.initState();
     _loadVehicleData();
+    _notesFocusNode.addListener(_handleNotesFocusChanged);
+  }
+
+  void _handleNotesFocusChanged() {
+    if (!_notesFocusNode.hasFocus) return;
+    _ensureNotesVisible();
+  }
+
+  void _ensureNotesVisible() {
+    void scrollToNotes() {
+      if (!mounted || !_notesFocusNode.hasFocus) return;
+
+      // Scroll the outer module/modal, not the TextField's internal
+      // EditableText scrollable.
+      final fieldContext = _notesFieldKey.currentContext;
+      if (fieldContext == null) return;
+
+      Scrollable.ensureVisible(
+        fieldContext,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        // Keep the notes field close to the keyboard so the active
+        // input remains immediately usable on Android.
+        alignment: 0.86,
+        alignmentPolicy:
+            ScrollPositionAlignmentPolicy.explicit,
+      );
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      scrollToNotes();
+    });
+    Future<void>.delayed(
+      const Duration(milliseconds: 180),
+      scrollToNotes,
+    );
+    Future<void>.delayed(
+      const Duration(milliseconds: 360),
+      scrollToNotes,
+    );
+    Future<void>.delayed(
+      const Duration(milliseconds: 520),
+      scrollToNotes,
+    );
   }
 
   @override
@@ -323,7 +379,9 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
 
   @override
   void dispose() {
+    _notesFocusNode.removeListener(_handleNotesFocusChanged);
     _notesController.dispose();
+    _notesFocusNode.dispose();
     super.dispose();
   }
 
@@ -333,9 +391,13 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
       return _buildPreviewScreen();
     }
 
+    // OfferRideModal owns the keyboard resize and the single scroll view.
+    // Keep this module as a normal Column so the parent can move Notes and
+    // the other controls above the keyboard.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+
         _buildHeader(),
         const SizedBox(height: 16),
 
@@ -1019,14 +1081,25 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
               },
             ),
           const SizedBox(height: 9),
-          TextField(
-            controller: _notesController,
-            maxLines: 3,
-            maxLength: 250,
-            decoration: _inputDecoration(
-              'Additional notes',
-              'Anything passengers should know before requesting?',
-              Icons.notes_rounded,
+          Container(
+            key: _notesFieldKey,
+            child: TextField(
+              controller: _notesController,
+              focusNode: _notesFocusNode,
+              keyboardType: TextInputType.multiline,
+              textInputAction: TextInputAction.newline,
+              maxLines: 3,
+              minLines: 3,
+              maxLength: 250,
+              // OfferRideModal owns the keyboard-safe viewport. Do not ask
+              // EditableText to perform a second inset/scroll adjustment.
+              scrollPadding: EdgeInsets.zero,
+              onTap: _ensureNotesVisible,
+              decoration: _inputDecoration(
+                'Additional notes',
+                'Anything passengers should know before requesting?',
+                Icons.notes_rounded,
+              ),
             ),
           ),
         ],
@@ -1323,12 +1396,7 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
           child: Column(
             children: [
               _previewRow('Model', vehicle.vehicleModel),
-              _previewRow('Type', vehicle.vehicleType),
               _previewRow('Registration', vehicle.registrationNumber),
-              _previewRow(
-                'Vehicle capacity',
-                '${vehicle.seatingCapacity} seats',
-              ),
               if (vehicle.color != null &&
                   vehicle.color!.trim().isNotEmpty)
                 _previewRow('Color', vehicle.color!),
@@ -1366,9 +1434,7 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
             children: [
               _previewRow(
                 'AC',
-                _supportsAc(vehicle)
-                    ? (details.isAc ? 'AC' : 'Non-AC')
-                    : 'Not applicable',
+                details.isAc ? 'AC' : 'Non-AC',
               ),
               _previewRow(
                 'Flexible pickup',
@@ -1384,9 +1450,7 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
               ),
               _previewRow(
                 'Music',
-                _supportsMusic(vehicle)
-                    ? (details.allowMusic ? 'Okay' : 'Not allowed')
-                    : 'Not applicable',
+                details.allowMusic ? 'Okay' : 'Not allowed',
               ),
               if (details.additionalNotes.isNotEmpty)
                 _previewRow('Notes', details.additionalNotes),
@@ -1544,7 +1608,6 @@ class _RideDetailsModuleState extends State<RideDetailsModule> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '${vehicle.vehicleType} • '
                   '${details.seats} passenger seats • '
                   '${details.isAc ? 'AC' : 'Non-AC'}',
                   style: const TextStyle(

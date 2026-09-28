@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
-
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -267,11 +268,6 @@ class _RouteSelectionModuleState
     extends State<RouteSelectionModule> {
   static _RouteSelectionDraft? _savedDraft;
 
-  // Map display mode is kept at Module 1 state level so closing/reopening
-  // the location picker keeps the user's choice. When Module 1 is disposed
-  // (the host changes module), this state is recreated and starts in Normal.
-  MapType _mapType = MapType.normal;
-
   final LocationService _locationService =
       LocationService.instance;
 
@@ -298,6 +294,26 @@ class _RouteSelectionModuleState
       FocusNode();
 
   PlaceSuggestion? _selectedSource;
+
+  void _onLocationFocusChanged() {
+    if (!mounted) return;
+    setState(() {});
+    if (_sourceFocusNode.hasFocus) {
+      _ensureFocusedFieldVisible(_sourceFocusNode);
+    } else if (_destinationFocusNode.hasFocus) {
+      _ensureFocusedFieldVisible(_destinationFocusNode);
+    }
+  }
+
+  void _attachStopFocusListener(_RideStop stop) {
+    stop.focusNode.addListener(() {
+      if (!mounted) return;
+      setState(() {});
+      if (stop.focusNode.hasFocus) {
+        _ensureFocusedFieldVisible(stop.focusNode);
+      }
+    });
+  }
 
   PlaceSuggestion? _selectedDestination;
 
@@ -343,6 +359,9 @@ class _RouteSelectionModuleState
 
   bool _isCalculatingRoute = false;
 
+  // Persistent map type for the entire Route Selection module.
+  MapType _mapType = MapType.normal;
+
   // ==============================================================
   // INITIALIZATION
   // ==============================================================
@@ -350,6 +369,9 @@ class _RouteSelectionModuleState
   @override
   void initState() {
     super.initState();
+
+    _sourceFocusNode.addListener(_onLocationFocusChanged);
+    _destinationFocusNode.addListener(_onLocationFocusChanged);
 
     _restoreSavedSearch();
   }
@@ -380,6 +402,7 @@ class _RouteSelectionModuleState
 
     for (final savedStop in draft.stops) {
       final stop = _RideStop();
+      _attachStopFocusListener(stop);
 
       stop.controller.text =
           savedStop.text;
@@ -441,6 +464,9 @@ class _RouteSelectionModuleState
 
     _destinationController.dispose();
 
+    _sourceFocusNode.removeListener(_onLocationFocusChanged);
+    _destinationFocusNode.removeListener(_onLocationFocusChanged);
+
     _sourceFocusNode.dispose();
 
     _destinationFocusNode.dispose();
@@ -494,10 +520,13 @@ class _RouteSelectionModuleState
 
   @override
   Widget build(BuildContext context) {
+    // OfferRideModal owns the keyboard resize and the single scroll view.
+    // This module must remain a normal-height child so the parent can scroll
+    // the focused location field into the visible area.
     return Column(
-      crossAxisAlignment:
-          CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+
         _sectionTitle(
           'When are you travelling?',
           'Choose when you plan to start your ride.',
@@ -1118,6 +1147,7 @@ class _RouteSelectionModuleState
     return InkWell(
       onTap: () {
         final stop = _RideStop();
+        _attachStopFocusListener(stop);
 
         setState(() {
           _stops.add(stop);
@@ -1201,112 +1231,98 @@ class _RouteSelectionModuleState
     required List<PlaceSuggestion> suggestions,
     required bool searching,
     required ValueChanged<String> onChanged,
-    required ValueChanged<PlaceSuggestion>
-        onSuggestionSelected,
+    required ValueChanged<PlaceSuggestion> onSuggestionSelected,
     required VoidCallback onMapTap,
     required VoidCallback onClear,
   }) {
-    return Column(
-      crossAxisAlignment:
-          CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding:
-              const EdgeInsets.symmetric(
-            horizontal: 13,
-            vertical: 3,
-          ),
+    final showSuggestions =
+        focusNode.hasFocus && suggestions.isNotEmpty;
 
-          decoration: BoxDecoration(
-            color:
-                const Color(0xFFF8FAFC),
-            borderRadius:
-                BorderRadius.circular(14),
-            border: Border.all(
-              color:
-                  const Color(0xFFE1E6EC),
+    // IMPORTANT:
+    // Keep suggestions in the normal widget tree, ABOVE the TextField.
+    // Do not position them outside the Stack bounds. An overflowed
+    // Positioned child can look visible but fail Android hit testing when
+    // this whole module is inside OfferRideModal's SingleChildScrollView.
+    //
+    // The parent modal owns keyboard resizing/scrolling. This field only
+    // controls the order of its own contents:
+    //
+    //   suggestions
+    //   input
+    //
+    // This makes the suggestion rows directly tappable on Android while the
+    // parent scroll view can still move the complete field above the keyboard.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (showSuggestions)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 7),
+            child: _buildSuggestions(
+              suggestions,
+              onSuggestionSelected,
             ),
           ),
 
+        Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 13,
+            vertical: 3,
+          ),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: const Color(0xFFE1E6EC),
+            ),
+          ),
           child: Row(
             children: [
-              Icon(
-                icon,
-                size: 20,
-                color: iconColor,
-              ),
-
+              Icon(icon, size: 20, color: iconColor),
               const SizedBox(width: 8),
-
               Expanded(
                 child: TextField(
-                  controller:
-                      controller,
-                  focusNode:
-                      focusNode,
-                  onChanged:
-                      onChanged,
-
-                  decoration:
-                      InputDecoration(
-                    labelText:
-                        label,
-                    hintText:
-                        hint,
-                    border:
-                        InputBorder.none,
+                  controller: controller,
+                  focusNode: focusNode,
+                  onChanged: (value) {
+                    onChanged(value);
+                    _ensureFocusedFieldVisible(focusNode);
+                  },
+                  onTap: () => _ensureFocusedFieldVisible(focusNode),
+                  // The parent modal owns keyboard positioning. Keeping this zero
+                  // prevents EditableText from fighting the outer scroll view.
+                  scrollPadding: EdgeInsets.zero,
+                  decoration: InputDecoration(
+                    labelText: label,
+                    hintText: hint,
+                    border: InputBorder.none,
                     isDense: true,
                   ),
                 ),
               ),
-
-              if (controller
-                  .text
-                  .isNotEmpty)
+              if (controller.text.isNotEmpty)
                 IconButton(
-                  icon:
-                      const Icon(
-                    Icons.clear_rounded,
-                    size: 19,
-                  ),
-                  onPressed:
-                      onClear,
-                  tooltip:
-                      'Clear',
+                  icon: const Icon(Icons.clear_rounded, size: 19),
+                  onPressed: onClear,
+                  tooltip: 'Clear',
                 ),
-
               IconButton(
-                icon:
-                    const Icon(
+                icon: const Icon(
                   Icons.map_outlined,
-                  color:
-                      Color(0xFF1677FF),
+                  color: Color(0xFF1677FF),
                 ),
-                onPressed:
-                    onMapTap,
-                tooltip:
-                    'Select from map',
+                onPressed: onMapTap,
+                tooltip: 'Select from map',
               ),
             ],
           ),
         ),
 
-        if (searching)
+        if (searching && focusNode.hasFocus)
           const Padding(
-            padding:
-                EdgeInsets.only(
-              top: 8,
-            ),
-            child:
-                LinearProgressIndicator(
-              minHeight: 2,
-            ),
-          )
-        else if (
-            suggestions.isNotEmpty)
-          _buildSuggestions(
-            suggestions,
-            onSuggestionSelected,
+            padding: EdgeInsets.only(top: 4),
+            child: LinearProgressIndicator(minHeight: 2),
           ),
       ],
     );
@@ -1317,93 +1333,137 @@ class _RouteSelectionModuleState
   // ================================================================
 
   Widget _buildSuggestions(
-    List<PlaceSuggestion>
-        suggestions,
-    ValueChanged<PlaceSuggestion>
-        onSuggestionSelected,
+    List<PlaceSuggestion> suggestions,
+    ValueChanged<PlaceSuggestion> onSuggestionSelected,
   ) {
-    return Container(
-      margin:
-          const EdgeInsets.only(
-        top: 5,
-      ),
+    final visibleSuggestions = suggestions.take(5).toList();
 
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius:
-            BorderRadius.circular(13),
-        border: Border.all(
-          color:
-              const Color(0xFFE1E6EB),
-        ),
-        boxShadow: [
-          BoxShadow(
-            blurRadius: 12,
-            offset:
-                const Offset(0, 4),
-            color: Colors.black
-                .withOpacity(0.08),
+    // IMPORTANT:
+    // Do not use a nested ListView here. This widget itself is already inside
+    // OfferRideModal's SingleChildScrollView. On Android, the nested viewport
+    // can end up winning the gesture/hit-test path and make the visible rows
+    // appear tappable while the parent scroll view receives the gesture.
+    //
+    // A plain Column + opaque GestureDetector gives every suggestion a direct
+    // hit-test target and makes the entire row tappable.
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(13),
+      elevation: 3,
+      child: Container(
+        margin: const EdgeInsets.only(top: 5),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(13),
+          border: Border.all(
+            color: const Color(0xFFE1E6EB),
           ),
-        ],
-      ),
-
-      child: ListView.separated(
-        shrinkWrap: true,
-
-        physics:
-            const NeverScrollableScrollPhysics(),
-
-        itemCount:
-            suggestions.length.clamp(
-          0,
-          5,
         ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (int index = 0; index < visibleSuggestions.length; index++)
+                Builder(
+                  builder: (context) {
+                    final suggestion = visibleSuggestions[index];
 
-        separatorBuilder:
-            (_, __) =>
-                const Divider(
-          height: 1,
-          indent: 50,
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Listener(
+                          behavior: HitTestBehavior.opaque,
+                          onPointerDown: (_) {
+                            debugPrint(
+                              'LiftOff: suggestion pointer down: '
+                              '${suggestion.description}',
+                            );
+                            // Select on the raw Android pointer event.
+                            // This avoids the parent SingleChildScrollView's
+                            // gesture arena preventing onTap from firing.
+                            onSuggestionSelected(suggestion);
+                          },
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 12,
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.location_on_outlined,
+                                  color: Color(0xFF1677FF),
+                                  size: 21,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    suggestion.description,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (index < visibleSuggestions.length - 1)
+                          const Divider(
+                            height: 1,
+                            thickness: 1,
+                            indent: 50,
+                            endIndent: 0,
+                          ),
+                      ],
+                    );
+                  },
+                ),
+            ],
+          ),
         ),
-
-        itemBuilder:
-            (context, index) {
-          final suggestion =
-              suggestions[index];
-
-          return ListTile(
-            dense: true,
-
-            leading:
-                const Icon(
-              Icons.location_on_outlined,
-              color:
-                  Color(0xFF1677FF),
-              size: 21,
-            ),
-
-            title: Text(
-              suggestion
-                  .description,
-              maxLines: 2,
-              overflow:
-                  TextOverflow.ellipsis,
-              style:
-                  const TextStyle(
-                fontSize: 13,
-                fontWeight:
-                    FontWeight.w600,
-              ),
-            ),
-
-            onTap: () =>
-                onSuggestionSelected(
-              suggestion,
-            ),
-          );
-        },
       ),
     );
+  }
+
+  void _ensureFocusedFieldVisible(FocusNode focusNode) {
+    void scrollToField() {
+      if (!mounted || !focusNode.hasFocus) return;
+
+      final fieldContext = focusNode.context;
+      if (fieldContext == null) return;
+
+      final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+
+      Scrollable.ensureVisible(
+        fieldContext,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+        // Keep the active location field close to the keyboard while
+        // leaving the suggestion list above it visible.
+        alignment: keyboardInset > 0 ? 0.86 : 0.25,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+      );
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      scrollToField();
+    });
+
+    Future<void>.delayed(const Duration(milliseconds: 180), () {
+      if (mounted) scrollToField();
+    });
+
+    Future<void>.delayed(const Duration(milliseconds: 360), () {
+      if (mounted) scrollToField();
+    });
   }
 
   // ================================================================
@@ -1431,6 +1491,9 @@ class _RouteSelectionModuleState
     LatLng selectedPosition =
         initialPosition ??
             fallback;
+
+    // Persist map style across every map picker in Module 1.
+    var mapType = _mapType;
 
     return showModalBottomSheet<LatLng>(
       context: context,
@@ -1467,8 +1530,8 @@ class _RouteSelectionModuleState
                 (
               context,
               setMapState,
-            ) =>
-                    Column(
+            ) {
+              return Column(
               children: [
                 Padding(
                   padding:
@@ -1552,32 +1615,6 @@ class _RouteSelectionModuleState
                         ),
                       ),
 
-                      Container(
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF1F4F8),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: IconButton(
-                          onPressed: () {
-                            _mapType = _mapType == MapType.hybrid
-                                ? MapType.normal
-                                : MapType.hybrid;
-                            setMapState(() {});
-                          },
-                          tooltip: _mapType == MapType.hybrid
-                              ? 'Normal map'
-                              : 'Hybrid view',
-                          icon: Icon(
-                            _mapType == MapType.hybrid
-                                ? Icons.map_outlined
-                                : Icons.layers_outlined,
-                            color: const Color(0xFF1677FF),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 4),
-
                       IconButton(
                         onPressed: () =>
                             Navigator.of(
@@ -1604,60 +1641,105 @@ class _RouteSelectionModuleState
                     ),
 
                     child:
+                        Stack(
+                      children: [
                         GoogleMap(
-                      mapType: _mapType,
-
-                      initialCameraPosition:
-                          CameraPosition(
-                        target:
-                            selectedPosition,
-                        zoom:
-                            initialPosition !=
-                                    null
-                                ? 15
-                                : 12,
-                      ),
-
-                      onTap:
-                          (position) {
-                        selectedPosition =
-                            position;
-
-                        setMapState(
-                          () {},
-                        );
-                      },
-
-                      markers: {
-                        Marker(
-                          markerId:
-                              const MarkerId(
-                            'picked_location',
+                          // The route-selection map lives inside a scrollable
+                          // bottom-sheet on Android. Eagerly claiming the map
+                          // gestures prevents the parent sheet scroll view from
+                          // stealing pan/pinch gestures from Google Maps.
+                          gestureRecognizers:
+                              <Factory<OneSequenceGestureRecognizer>>{
+                            Factory<OneSequenceGestureRecognizer>(
+                              () => EagerGestureRecognizer(),
+                            ),
+                          },
+                          mapType: mapType,
+                          scrollGesturesEnabled: true,
+                          zoomGesturesEnabled: true,
+                          rotateGesturesEnabled: true,
+                          tiltGesturesEnabled: true,
+                          initialCameraPosition: CameraPosition(
+                            target: selectedPosition,
+                            zoom: initialPosition != null ? 15 : 12,
                           ),
-                          position:
-                              selectedPosition,
-                          infoWindow:
-                              const InfoWindow(
-                            title:
-                                'Selected location',
+                          onTap: (position) {
+                            selectedPosition = position;
+                            setMapState(() {});
+                          },
+                          markers: {
+                            Marker(
+                              markerId: const MarkerId('picked_location'),
+                              position: selectedPosition,
+                              infoWindow: const InfoWindow(
+                                title: 'Selected location',
+                              ),
+                            ),
+                          },
+                          myLocationEnabled: false,
+                          myLocationButtonEnabled: false,
+                          zoomControlsEnabled: false,
+                          mapToolbarEnabled: false,
+                          compassEnabled: true,
+                        ),
+
+                        Positioned(
+                          top: 12,
+                          right: 12,
+                          child: Material(
+                            color: Colors.white,
+                            elevation: 4,
+                            borderRadius: BorderRadius.circular(12),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: () {
+                                final nextMapType =
+                                    mapType == MapType.normal
+                                        ? MapType.hybrid
+                                        : MapType.normal;
+
+                                setMapState(() {
+                                  mapType = nextMapType;
+                                });
+
+                                if (mounted) {
+                                  setState(() {
+                                    _mapType = nextMapType;
+                                  });
+                                }
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 9,
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      mapType == MapType.normal
+                                          ? Icons.map_outlined
+                                          : Icons.satellite_alt_outlined,
+                                      size: 18,
+                                      color: const Color(0xFF1677FF),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      mapType == MapType.normal
+                                          ? 'Normal'
+                                          : 'Hybrid',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                           ),
                         ),
-                      },
-
-                      myLocationEnabled:
-                          false,
-
-                      myLocationButtonEnabled:
-                          false,
-
-                      zoomControlsEnabled:
-                          false,
-
-                      mapToolbarEnabled:
-                          false,
-
-                      compassEnabled:
-                          true,
+                      ],
                     ),
                   ),
                 ),
@@ -1797,7 +1879,8 @@ class _RouteSelectionModuleState
                   ),
                 ),
               ],
-            ),
+            );
+            },
           ),
         ),
       ),
@@ -2053,10 +2136,8 @@ class _RouteSelectionModuleState
   Future<void> _selectSource(
     PlaceSuggestion suggestion,
   ) async {
-    FocusManager
-        .instance
-        .primaryFocus
-        ?.unfocus();
+    _sourceDebounce?.cancel();
+    _sourceRequestId++;
 
     setState(() {
       _sourceController.text =
@@ -2066,12 +2147,21 @@ class _RouteSelectionModuleState
           suggestion;
 
       _sourceSuggestions = [];
+      _sourceSearching = false;
 
       _sourceLatLng = null;
 
       _invalidateRoute();
 
       _saveSearchDraft();
+    });
+
+    // Let the current Android tap finish before dismissing the keyboard.
+    // Dismissing focus synchronously can trigger a parent rebuild during the
+    // same pointer event on some Android devices.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      FocusScope.of(context).unfocus();
     });
 
     try {
@@ -2186,10 +2276,8 @@ class _RouteSelectionModuleState
       _selectDestination(
     PlaceSuggestion suggestion,
   ) async {
-    FocusManager
-        .instance
-        .primaryFocus
-        ?.unfocus();
+    _destinationDebounce?.cancel();
+    _destinationRequestId++;
 
     setState(() {
       _destinationController
@@ -2201,6 +2289,7 @@ class _RouteSelectionModuleState
 
       _destinationSuggestions =
           [];
+      _destinationSearching = false;
 
       _destinationLatLng =
           null;
@@ -2208,6 +2297,11 @@ class _RouteSelectionModuleState
       _invalidateRoute();
 
       _saveSearchDraft();
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      FocusScope.of(context).unfocus();
     });
 
     try {
@@ -2315,10 +2409,8 @@ class _RouteSelectionModuleState
     _RideStop stop,
     PlaceSuggestion suggestion,
   ) async {
-    FocusManager
-        .instance
-        .primaryFocus
-        ?.unfocus();
+    stop.debounce?.cancel();
+    stop.requestId++;
 
     setState(() {
       stop.controller.text =
@@ -2328,12 +2420,18 @@ class _RouteSelectionModuleState
           suggestion;
 
       stop.suggestions = [];
+      stop.searching = false;
 
       stop.latLng = null;
 
       _invalidateRoute();
 
       _saveSearchDraft();
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      FocusScope.of(context).unfocus();
     });
 
     try {
