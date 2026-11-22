@@ -1,27 +1,64 @@
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import LineString
 
+from app.db.schemas.ride import GeoPoint
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal Types
+# ─────────────────────────────────────────────────────────────────────────────
+
+GeometryPointInput = GeoPoint | Mapping[str, float]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Point Validation
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _validate_point(
-    point: dict[str, float],
+    point: GeometryPointInput,
 ) -> tuple[float, float]:
+    """
+    Validate a geographic point and convert it into the coordinate order
+    required by Shapely/PostGIS.
 
-    if "latitude" not in point or "longitude" not in point:
+    API representation:
+        latitude
+        longitude
+
+    PostGIS / Shapely representation:
+        X = longitude
+        Y = latitude
+    """
+
+    if isinstance(point, GeoPoint):
+        lat = float(point.latitude)
+        lng = float(point.longitude)
+
+    elif isinstance(point, Mapping):
+        if "latitude" not in point or "longitude" not in point:
+            raise ValueError(
+                "Every geometry point must contain latitude and longitude."
+            )
+
+        lat = float(point["latitude"])
+        lng = float(point["longitude"])
+
+    else:
         raise ValueError(
-            "Every geometry point must contain latitude and longitude."
+            "Invalid geometry point. "
+            "Expected GeoPoint or latitude/longitude mapping."
         )
 
-    lat = float(point["latitude"])
-    lng = float(point["longitude"])
-
-    if not -90 <= lat <= 90:
+    if not -90.0 <= lat <= 90.0:
         raise ValueError(
             "Latitude must be between -90 and 90."
         )
 
-    if not -180 <= lng <= 180:
+    if not -180.0 <= lng <= 180.0:
         raise ValueError(
             "Longitude must be between -180 and 180."
         )
@@ -32,17 +69,21 @@ def _validate_point(
     return lng, lat
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# API → PostGIS
+# ─────────────────────────────────────────────────────────────────────────────
+
 def line_from_api_points(
-    points: list[dict[str, float]],
+    points: Sequence[GeometryPointInput],
 ):
     """
     Convert API route points into a PostGIS LINESTRING.
 
     API:
-        latitude, longitude
+        latitude / longitude
 
     PostGIS:
-        longitude, latitude
+        longitude / latitude
     """
 
     if len(points) < 2:
@@ -73,9 +114,24 @@ def line_from_api_points(
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PostGIS → API
+# ─────────────────────────────────────────────────────────────────────────────
+
 def api_points_from_geometry(
     value: Any,
-) -> list[dict[str, float]]:
+) -> list[GeoPoint]:
+    """
+    Convert a PostGIS geometry value back into API GeoPoint objects.
+
+    PostGIS / Shapely:
+        X = longitude
+        Y = latitude
+
+    API:
+        latitude
+        longitude
+    """
 
     if value is None:
         return []
@@ -86,9 +142,9 @@ def api_points_from_geometry(
         return []
 
     return [
-        {
-            "latitude": float(lat),
-            "longitude": float(lng),
-        }
+        GeoPoint(
+            latitude=float(lat),
+            longitude=float(lng),
+        )
         for lng, lat in shape.coords
     ]

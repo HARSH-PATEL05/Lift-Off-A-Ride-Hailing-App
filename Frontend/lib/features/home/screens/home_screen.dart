@@ -248,11 +248,11 @@ class _HomeScreenState extends State<HomeScreen>
       (LatLng position) {
         if (!mounted) return;
 
-        // debugPrint(
-        //   'HomeScreen LIVE LOCATION: '
-        //   '${position.latitude}, '
-        //   '${position.longitude}',
-        // );
+        debugPrint(
+          'HomeScreen LIVE LOCATION: '
+          '${position.latitude}, '
+          '${position.longitude}',
+        );
 
         // ------------------------------------------------------
         // Update map/live position immediately.
@@ -1264,6 +1264,15 @@ class _HomeScreenState extends State<HomeScreen>
 
                           initialStops:
                               _routeStops,
+
+                          routeSource:
+                              _routeSource,
+
+                          routeDestination:
+                              _routeDestination,
+
+                          routeCoordinates:
+                              _routeCoordinates,
 
                           isSearchingRoute:
                               _isSearchingRoute,

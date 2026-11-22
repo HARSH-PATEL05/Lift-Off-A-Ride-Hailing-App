@@ -6,7 +6,8 @@ from app.db.database import Base
 
 class HostStat(Base):
     """
-    Stores host performance metrics (Fuel Recovered, Shared Commutes, CO2 Saved).
+    Stores aggregated host reputation, ride history,
+    behavioural rating, and community impact metrics.
     """
 
     __tablename__ = "host_stats"
@@ -25,15 +26,42 @@ class HostStat(Base):
         index=True,
     )
 
-    fuel_recovered_inr: Mapped[float] = mapped_column(
+    # ─── Host Reputation ───────────────────────────────────────
+
+    # Overall rating given by passengers.
+    rating: Mapped[float] = mapped_column(
         Float,
         default=0.0,
         nullable=False,
     )
 
+    # Behavioural rating based on factors such as:
+    # punctuality, cancellations, conduct, reliability, etc.
+    behavioural_rating: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        nullable=False,
+    )
+
+    # ─── Ride History ─────────────────────────────────────────
+
     shared_commutes_count: Mapped[int] = mapped_column(
+            Integer,
+            default=0,
+            nullable=False,
+        )
+    # Number of rides successfully completed by the host.
+    completed_rides_count: Mapped[int] = mapped_column(
         Integer,
         default=0,
+        nullable=False,
+    )
+
+    # ─── Community Impact ─────────────────────────────────────
+
+    fuel_recovered_inr: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
         nullable=False,
     )
 
@@ -43,6 +71,8 @@ class HostStat(Base):
         nullable=False,
     )
 
+    # ─── Timestamp ────────────────────────────────────────────
+
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -50,4 +80,9 @@ class HostStat(Base):
         nullable=False,
     )
 
-    user = relationship("User", backref="host_stat")
+    # ─── Relationship ─────────────────────────────────────────
+
+    user = relationship(
+        "User",
+        backref="host_stat",
+    )

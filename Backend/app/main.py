@@ -16,7 +16,7 @@ from app.db.models.ride import Ride
 from app.db.models.host_stat import HostStat
 
 
-from app.routes import auth, verification, rides ,vehicles
+from app.routes import auth, verification, rides ,vehicles ,community_rides
 
 
 Base.metadata.create_all(bind=engine)
@@ -38,6 +38,8 @@ app.include_router(auth.user_router)
 app.include_router(verification.router)
 app.include_router(rides.router)
 app.include_router(vehicles.router)
+app.include_router(community_rides.router)
+
 
 @app.get("/")
 def home():

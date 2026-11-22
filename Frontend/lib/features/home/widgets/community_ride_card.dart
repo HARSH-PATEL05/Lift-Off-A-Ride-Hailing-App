@@ -305,6 +305,27 @@ class CommunityRideCard extends StatelessWidget {
                 ),
               ],
             ),
+
+            const SizedBox(height: 12),
+
+            SizedBox(
+              width: double.infinity,
+              height: 42,
+              child: OutlinedButton.icon(
+                onPressed: onTap,
+                icon: const Icon(Icons.open_in_new_rounded, size: 17),
+                label: const Text('View Details'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.midnightBlue,
+                  side: BorderSide(
+                    color: AppColors.primaryTeal.withAlpha(130),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
